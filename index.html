@@ -94,7 +94,7 @@
         }
         
         #live-decrypted-text {
-            background: rgba(250, 189, 47, 0.7); /* Yellow with transparency */
+            background: rgba(250, 189, 47, 0.7);
             color: #3c3836;
             border: 1px solid #fabd2f;
             border-radius: 0.3rem;
@@ -226,6 +226,21 @@
             font-style: italic;
             color: #928374;
             text-align: center;
+            position: relative;
+        }
+        
+        #status.loading:after {
+            content: "⠋";
+            animation: spin 1s infinite linear;
+            margin-left: 0.5rem;
+        }
+        
+        @keyframes spin {
+            0% { content: "⠋"; }
+            25% { content: "⠙"; }
+            50% { content: "⠹"; }
+            75% { content: "⠸"; }
+            100% { content: "⠋"; }
         }
         
         #error-message {
@@ -317,6 +332,7 @@
             console.error(message, err);
             errorMessage.textContent = `${message}: ${err.message || err}`;
             errorMessage.style.display = 'block';
+            statusText.classList.remove('loading');
         }
         
         function clearError() {
@@ -331,8 +347,8 @@
             await tesseractWorker.initialize('eng');
             await tesseractWorker.setParameters({
                 tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? ',
-                tessedit_pageseg_mode: 6, // PSM_SINGLE_BLOCK
-                tessedit_ocr_engine_mode: 1, // OEM_LSTM_ONLY
+                tessedit_pageseg_mode: 6,
+                tessedit_ocr_engine_mode: 1,
                 preserve_interword_spaces: '1'
             });
             return tesseractWorker;
@@ -341,8 +357,6 @@
         function preprocessImage(context, width, height) {
             const imageData = context.getImageData(0, 0, width, height);
             const data = imageData.data;
-            
-            // Grayscale
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
                 const g = data[i + 1];
@@ -350,38 +364,97 @@
                 const gray = 0.2989 * r + 0.5870 * g + 0.1140 * b;
                 data[i] = data[i + 1] = data[i + 2] = gray;
             }
-            
-            // Contrast enhancement
             for (let i = 0; i < data.length; i += 4) {
                 data[i] = data[i + 1] = data[i + 2] = data[i] > 127 ? 255 : 0;
             }
-            
             context.putImageData(imageData, 0, 0);
         }
         
         async function startCamera() {
             clearError();
-            statusText.textContent = "Starting camera...";
-            try {
-                if (stream) stream.getTracks().forEach(track => track.stop());
-                stream = await navigator.mediaDevices.getUserMedia({
-                    video: { facingMode: 'environment' },
-                    audio: false
-                });
-                video.srcObject = stream;
-                await video.play();
-                currentCamera = 'back';
-                startButton.textContent = 'Camera Active';
-                statusText.textContent = 'Camera ready. Toggle live mode to scan.';
-                await initTesseract(); // Preload Tesseract
-            } catch (err) {
-                showError('Camera error', err);
-                statusText.textContent = 'Camera failed. Check permissions.';
+            statusText.textContent = "Camera initializing…";
+            statusText.classList.add('loading');
+            console.log("Starting camera...");
+            
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showError("Camera not supported", new Error("No media devices available"));
+                return;
             }
+            
+            const maxAttempts = 3;
+            let attempt = 0;
+            
+            async function tryStart() {
+                try {
+                    if (stream) {
+                        stream.getTracks().forEach(track => track.stop());
+                        console.log("Stopped existing stream");
+                    }
+                    
+                    // Check permissions
+                    if (navigator.permissions && navigator.permissions.query) {
+                        const permission = await navigator.permissions.query({ name: 'camera' });
+                        if (permission.state === 'denied') {
+                            throw new Error("Camera access denied");
+                        }
+                        console.log("Permission state:", permission.state);
+                    }
+                    
+                    // Try environment camera first
+                    try {
+                        stream = await navigator.mediaDevices.getUserMedia({
+                            video: { facingMode: 'environment' },
+                            audio: false
+                        });
+                        console.log("Got environment camera");
+                    } catch (envErr) {
+                        console.log("Environment failed, trying any camera:", envErr);
+                        stream = await navigator.mediaDevices.getUserMedia({
+                            video: true,
+                            audio: false
+                        });
+                        console.log("Got any available camera");
+                    }
+                    
+                    video.srcObject = stream;
+                    await new Promise((resolve) => {
+                        video.onloadedmetadata = () => {
+                            console.log("Video metadata loaded");
+                            resolve();
+                        };
+                    });
+                    await video.play();
+                    currentCamera = 'back';
+                    startButton.textContent = 'Camera Active';
+                    statusText.textContent = 'Camera ready. Toggle live mode to scan.';
+                    statusText.classList.remove('loading');
+                    await initTesseract();
+                } catch (err) {
+                    attempt++;
+                    if (attempt < maxAttempts) {
+                        console.log(`Attempt ${attempt} failed, retrying...`, err);
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        return tryStart();
+                    }
+                    let errorMsg = "Camera failed";
+                    if (err.name === 'NotAllowedError') errorMsg = "Grant camera access!";
+                    else if (err.name === 'NotFoundError') errorMsg = "No camera found!";
+                    else if (err.name === 'OverconstrainedError') errorMsg = "Camera constraints too strict!";
+                    showError(errorMsg, err);
+                    statusText.textContent = "Camera failed. Click Start Camera again.";
+                }
+            }
+            
+            await tryStart();
+            setTimeout(() => {
+                if (!stream) statusText.textContent = "Camera not started. Click Start Camera again.";
+            }, 5000);
         }
         
         async function switchCamera() {
             clearError();
+            statusText.textContent = "Switching camera…";
+            statusText.classList.add('loading');
             try {
                 const newFacingMode = currentCamera === 'back' ? 'user' : 'environment';
                 if (stream) stream.getTracks().forEach(track => track.stop());
@@ -393,8 +466,10 @@
                 await video.play();
                 currentCamera = currentCamera === 'back' ? 'front' : 'back';
                 statusText.textContent = `Using ${currentCamera} camera`;
+                statusText.classList.remove('loading');
             } catch (err) {
                 showError('Switch error', err);
+                statusText.textContent = "Switch failed. Try again.";
             }
         }
         
@@ -416,19 +491,17 @@
             }
             liveEncryptedText.style.display = 'block';
             liveDecryptedText.style.display = 'block';
-            const interval = window.innerWidth < 400 ? 1500 : 1000; // Faster on bigger screens
+            const interval = window.innerWidth < 400 ? 1500 : 1000;
             let lastProcessTime = 0;
             
             liveDetectionInterval = setInterval(async () => {
                 if (!liveMode || (frameSkip && Date.now() - lastProcessTime < interval)) return;
-                frameSkip = !frameSkip; // Skip every other frame if lagging
+                frameSkip = !frameSkip;
                 
                 try {
                     const startTime = Date.now();
                     canvas.width = Math.round(video.videoWidth * 0.8);
                     canvas.height = Math.round(video.videoHeight * 0.8);
-                    
-                    // Crop to central 70%
                     const cropWidth = canvas.width * 0.7;
                     const cropHeight = canvas.height * 0.7;
                     const offsetX = (canvas.width - cropWidth) / 2;
@@ -502,7 +575,7 @@
         switchButton.addEventListener('click', switchCamera);
         liveModeToggle.addEventListener('change', toggleLiveMode);
         
-        document.addEventListener('DOMContentLoaded', () => setTimeout(startCamera, 500));
+        window.onload = () => setTimeout(startCamera, 500);
     </script>
 </body>
 </html>
