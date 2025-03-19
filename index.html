@@ -3,138 +3,317 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cipher Cracker 3000</title>
-    <script src="https://cdn.jsdelivr.net/npm/webcam-easy@1.0.5/dist/webcam-easy.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
+    <title>Cipher Text Detector</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js"></script>
     <style>
-        body { background: #1a1a1a; color: #0f0; font-family: 'Courier New', monospace; margin: 0; }
-        video, canvas { width: 100%; max-width: 640px; margin: 10px auto; display: block; border: 2px solid #f00; }
-        #output { margin: 20px; font-size: 18px; text-align: center; text-shadow: 0 0 5px #0f0; }
-        .message-stack { display: flex; flex-direction: column; gap: 10px; }
-        .encrypted { color: #f00; font-weight: bold; }
-        .decrypted { color: #0f0; font-weight: bold; }
-        #debug { font-size: 14px; color: #ff0; }
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        #video-container {
+            position: relative;
+            max-width: 100%;
+            margin: 0 auto;
+        }
+        
+        #video {
+            width: 100%;
+            max-width: 640px;
+            border: 3px solid #333;
+            border-radius: 8px;
+        }
+        
+        #result-container {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f0f0f0;
+            border-radius: 8px;
+            text-align: left;
+        }
+        
+        .result-box {
+            margin-bottom: 10px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        
+        #encrypted-text {
+            background-color: #e6f7ff;
+            border: 1px solid #91d5ff;
+        }
+        
+        #decrypted-text {
+            background-color: #f6ffed;
+            border: 1px solid #b7eb8f;
+        }
+        
+        .status {
+            font-style: italic;
+            color: #666;
+        }
+        
+        button {
+            background-color: #1890ff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px 5px;
+        }
+        
+        button:hover {
+            background-color: #40a9ff;
+        }
+        
+        h2 {
+            margin-top: 5px;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
-    <video id="webcam" autoplay playsinline></video>
-    <canvas id="canvas" style="display: none;"></canvas>
-    <div id="output">Initializing Rebel Scan...</div>
-    <div id="debug"></div>
-
+    <h1>Cipher Text Detector</h1>
+    <p>Point your camera at the encrypted Caesar cipher text (shift 3)</p>
+    
+    <div id="video-container">
+        <video id="video" autoplay playsinline></video>
+    </div>
+    
+    <div>
+        <button id="start-btn">Start Camera</button>
+        <button id="switch-btn">Switch Camera</button>
+        <button id="capture-btn">Capture & Decode</button>
+    </div>
+    
+    <div id="result-container">
+        <h2>Results:</h2>
+        <p class="status" id="status">Waiting for text detection...</p>
+        
+        <h3>Encrypted Text:</h3>
+        <div class="result-box" id="encrypted-text">No text detected yet</div>
+        
+        <h3>Decrypted Text:</h3>
+        <div class="result-box" id="decrypted-text">No text decoded yet</div>
+    </div>
+    
+    <canvas id="canvas" style="display:none;"></canvas>
+    
     <script>
-        const webcamElement = document.getElementById('webcam');
-        const canvasElement = document.getElementById('canvas');
-        const outputElement = document.getElementById('output');
-        const debugElement = document.getElementById('debug');
+        // DOM elements
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('start-btn');
+        const switchButton = document.getElementById('switch-btn');
+        const captureButton = document.getElementById('capture-btn');
+        const statusText = document.getElementById('status');
+        const encryptedTextDiv = document.getElementById('encrypted-text');
+        const decryptedTextDiv = document.getElementById('decrypted-text');
         
-        const targetCipher = "Zhofrph wr VHX Xqlyhuvlwb! Zh duh gholjkwhg wr kdyh brx zlwk xv wrgdb dv zh vkrzfdvh rxu dgydqfhphqwv lq frpsxwlqj vhfxulwb. Brxu ylvlw lv dq krqru, dqg zh orrn iruzdug wr lqvljkwixo glvfxvvlrqv dqg ixwxuh fROoderudwlrqv";
+        // Global variables
+        let stream = null;
+        let backCameraId = null;
+        let frontCameraId = null;
+        let currentCamera = 'back'; // Start with back camera
+        let isProcessing = false;
         
-        const webcam = new Webcam(webcamElement, 'environment', canvasElement);
+        // Initialize Tesseract
+        const worker = Tesseract.createWorker();
         
-        webcam.start()
-            .then(() => {
-                console.log("Camera online, comrade!");
-                detectText();
-            })
-            .catch(err => {
-                console.log("Camera rebellion failed: ", err);
-                outputElement.innerHTML = "Camera access denied. Check permissions, rebel!";
+        // Setup Tesseract worker
+        async function initTesseract() {
+            await worker.load();
+            await worker.loadLanguage('eng');
+            await worker.initialize('eng');
+            await worker.setParameters({
+                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? '
             });
-
-        function decodeCaesarCipher(str, shift) {
-            return str.split('').map(char => {
-                if (char.match(/[a-zA-Z]/)) {
-                    const code = char.charCodeAt(0);
-                    const base = code >= 65 && code <= 90 ? 65 : 97;
-                    return String.fromCharCode(((code - base - shift + 26) % 26) + base);
+            console.log("Tesseract worker initialized");
+        }
+        
+        // Start initialization
+        initTesseract();
+        
+        // Function to start camera
+        async function startCamera() {
+            try {
+                // Get list of video devices
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                
+                // Try to identify back and front cameras
+                for (const device of videoDevices) {
+                    const label = device.label.toLowerCase();
+                    if (label.includes('back') || label.includes('rear') || label.includes('environment')) {
+                        backCameraId = device.deviceId;
+                    } else if (label.includes('front') || label.includes('face') || label.includes('user')) {
+                        frontCameraId = device.deviceId;
+                    }
                 }
+                
+                // If we couldn't identify cameras by label, make educated guesses
+                if (videoDevices.length >= 2 && !backCameraId && !frontCameraId) {
+                    backCameraId = videoDevices[0].deviceId;
+                    frontCameraId = videoDevices[1].deviceId;
+                } else if (videoDevices.length === 1) {
+                    backCameraId = videoDevices[0].deviceId;
+                    frontCameraId = videoDevices[0].deviceId;
+                }
+                
+                // Default constraints for back camera
+                const constraints = {
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                };
+                
+                // If we have an explicit device ID, use it
+                if (backCameraId) {
+                    constraints.video.deviceId = { exact: backCameraId };
+                    delete constraints.video.facingMode;
+                }
+                
+                // Get stream
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                currentCamera = 'back';
+                
+                startButton.textContent = 'Camera Active';
+                statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
+            } catch (err) {
+                console.error('Error accessing the camera:', err);
+                statusText.textContent = 'Error accessing camera: ' + err.message;
+            }
+        }
+        
+        // Function to switch camera (between front and back)
+        async function switchCamera() {
+            try {
+                const newCamera = currentCamera === 'back' ? 'front' : 'back';
+                
+                const constraints = {
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }
+                };
+                
+                if (newCamera === 'back') {
+                    if (backCameraId) {
+                        constraints.video.deviceId = { exact: backCameraId };
+                    } else {
+                        constraints.video.facingMode = 'environment';
+                    }
+                } else {
+                    if (frontCameraId) {
+                        constraints.video.deviceId = { exact: frontCameraId };
+                    } else {
+                        constraints.video.facingMode = 'user';
+                    }
+                }
+                
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                
+                stream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = stream;
+                currentCamera = newCamera;
+                
+                statusText.textContent = `Switched to ${newCamera} camera. Click "Capture & Decode" to detect text.`;
+            } catch (err) {
+                console.error('Error switching camera:', err);
+                statusText.textContent = 'Error switching camera: ' + err.message;
+            }
+        }
+        
+        // Function to capture image and recognize text
+        async function captureAndDecode() {
+            if (isProcessing) {
+                statusText.textContent = "Still processing previous image, please wait...";
+                return;
+            }
+            
+            try {
+                isProcessing = true;
+                statusText.textContent = "Processing image...";
+                
+                // Set canvas dimensions to match video
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                // Draw video frame to canvas
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Get image data from canvas
+                const imageData = canvas.toDataURL('image/png');
+                
+                // Recognize text
+                statusText.textContent = "Detecting text...";
+                const result = await worker.recognize(imageData);
+                const detectedText = result.data.text.trim();
+                
+                if (detectedText.length > 0) {
+                    encryptedTextDiv.textContent = detectedText;
+                    
+                    // Decrypt using Caesar cipher (shift 3)
+                    const decryptedText = caesarDecrypt(detectedText, 3);
+                    decryptedTextDiv.textContent = decryptedText;
+                    
+                    statusText.textContent = "Text detected and decrypted!";
+                } else {
+                    statusText.textContent = "No text detected. Try again with better lighting or positioning.";
+                }
+            } catch (err) {
+                console.error('Error in text recognition:', err);
+                statusText.textContent = "Error processing image: " + err.message;
+            } finally {
+                isProcessing = false;
+            }
+        }
+        
+        // Caesar cipher decryption function (shift is how many letters to shift back)
+        function caesarDecrypt(text, shift) {
+            return text.split('').map(char => {
+                // Check if character is a letter
+                if (/[a-zA-Z]/.test(char)) {
+                    // Get ASCII code
+                    const code = char.charCodeAt(0);
+                    let shiftedCode;
+                    
+                    // Shift based on whether character is uppercase or lowercase
+                    if (code >= 65 && code <= 90) { // Uppercase
+                        shiftedCode = ((code - 65 - shift + 26) % 26) + 65;
+                    } else if (code >= 97 && code <= 122) { // Lowercase
+                        shiftedCode = ((code - 97 - shift + 26) % 26) + 97;
+                    }
+                    
+                    return String.fromCharCode(shiftedCode);
+                }
+                // Return non-alphabetic characters unchanged
                 return char;
             }).join('');
         }
-
-        async function detectText() {
-            while (true) {
-                const picture = webcam.snap();
-                canvasElement.src = picture;
-
-                // Advanced preprocessing
-                const context = canvasElement.getContext('2d');
-                context.drawImage(webcamElement, 0, 0, canvasElement.width, canvasElement.height);
-                const imgData = context.getImageData(0, 0, canvasElement.width, canvasElement.height);
-                const data = imgData.data;
-
-                // Grayscale and adaptive threshold
-                for (let i = 0; i < data.length; i += 4) {
-                    const r = data[i], g = data[i + 1], b = data[i + 2];
-                    const gray = 0.2989 * r + 0.5870 * g + 0.1140 * b; // Proper grayscale
-                    const threshold = gray > 150 ? 255 : 0; // Adaptive threshold
-                    data[i] = data[i + 1] = data[i + 2] = threshold;
-                }
-                context.putImageData(imgData, 0, 0);
-
-                const result = await Tesseract.recognize(
-                    canvasElement,
-                    'eng',
-                    { 
-                        logger: m => console.log(m),
-                        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !.,'
-                    }
-                );
-
-                let detectedText = result.data.text
-                    .replace(/\s+/g, ' ')
-                    .replace(/[^a-zA-Z\s!.]/g, '')
-                    .trim()
-                    .toUpperCase();
-
-                // Debug output
-                debugElement.innerHTML = `Detected: "${detectedText}"<br>Confidence: ${result.data.confidence}%`;
-
-                const similarity = calculateSimilarity(detectedText, targetCipher);
-                if (similarity > 0.7 || detectedText.includes(targetCipher.slice(0, 20))) { // Lowered threshold + substring check
-                    const decodedMessage = decodeCaesarCipher(targetCipher, 3);
-                    outputElement.innerHTML = `
-                        <div class="message-stack">
-                            <div class="encrypted">Encrypted: ${targetCipher}</div>
-                            <div class="decrypted">Decrypted: ${decodedMessage}</div>
-                        </div>
-                    `;
-                    break;
-                } else {
-                    outputElement.innerHTML = `Scanning... Similarity: ${(similarity * 100).toFixed(2)}%`;
-                }
-
-                await new Promise(resolve => setTimeout(resolve, 1500));
-            }
-        }
-
-        function calculateSimilarity(str1, str2) {
-            const longer = str1.length > str2.length ? str1 : str2;
-            const shorter = str1.length > str2.length ? str2 : str1;
-            const longerLength = longer.length;
-            if (longerLength === 0) return 1.0;
-            const distance = levenshteinDistance(str1, str2);
-            return (longerLength - distance) / longerLength;
-        }
-
-        function levenshteinDistance(str1, str2) {
-            const matrix = Array(str2.length + 1).fill(null)
-                .map(() => Array(str1.length + 1).fill(null));
-            for (let i = 0; i <= str1.length; i++) matrix[0][i] = i;
-            for (let j = 0; j <= str2.length; j++) matrix[j][0] = j;
-            for (let j = 1; j <= str2.length; j++) {
-                for (let i = 1; i <= str1.length; i++) {
-                    const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
-                    matrix[j][i] = Math.min(
-                        matrix[j][i - 1] + 1,
-                        matrix[j - 1][i] + 1,
-                        matrix[j - 1][i - 1] + indicator
-                    );
-                }
-            }
-            return matrix[str2.length][str1.length];
-        }
+        
+        // Event listeners
+        startButton.addEventListener('click', startCamera);
+        switchButton.addEventListener('click', switchCamera);
+        captureButton.addEventListener('click', captureAndDecode);
+        
+        // Start with back camera by default
+        document.addEventListener('DOMContentLoaded', () => {
+            startCamera();
+        });
     </script>
 </body>
 </html>
