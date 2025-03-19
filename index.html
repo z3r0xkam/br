@@ -9,35 +9,65 @@
         body {
             font-family: Arial, sans-serif;
             margin: 0;
-            padding: 20px;
+            padding: 10px;
             text-align: center;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+        
+        h1 {
+            margin-top: 0;
+            margin-bottom: 5px;
+            font-size: 24px;
+        }
+        
+        p {
+            margin-top: 0;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+        
+        .content-container {
+            display: flex;
+            flex-direction: row;
+            flex: 1;
+            overflow: hidden;
         }
         
         #video-container {
-            position: relative;
-            max-width: 100%;
-            margin: 0 auto;
+            width: 60%;
+            padding-right: 10px;
+            display: flex;
+            flex-direction: column;
         }
         
         #video {
             width: 100%;
-            max-width: 640px;
-            border: 3px solid #333;
+            height: auto;
+            max-height: 70vh;
+            border: 2px solid #333;
             border-radius: 8px;
+            object-fit: cover;
         }
         
         #result-container {
-            margin-top: 20px;
-            padding: 15px;
+            width: 40%;
+            padding: 10px;
             background-color: #f0f0f0;
             border-radius: 8px;
             text-align: left;
+            overflow-y: auto;
         }
         
         .result-box {
             margin-bottom: 10px;
-            padding: 10px;
+            padding: 8px;
             border-radius: 5px;
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+            font-size: 14px;
         }
         
         #encrypted-text {
@@ -53,25 +83,57 @@
         .status {
             font-style: italic;
             color: #666;
+            font-size: 14px;
+        }
+        
+        .button-container {
+            display: flex;
+            justify-content: center;
+            margin: 5px 0;
         }
         
         button {
             background-color: #1890ff;
             color: white;
             border: none;
-            padding: 10px 15px;
+            padding: 8px 12px;
             border-radius: 5px;
             cursor: pointer;
-            margin: 10px 5px;
+            margin: 0 5px;
+            font-size: 14px;
         }
         
         button:hover {
             background-color: #40a9ff;
         }
         
-        h2 {
+        h2, h3 {
             margin-top: 5px;
-            margin-bottom: 10px;
+            margin-bottom: 5px;
+            font-size: 16px;
+        }
+        
+        /* Landscape-specific adjustments */
+        @media (orientation: landscape) {
+            .content-container {
+                flex-direction: row;
+            }
+        }
+        
+        /* Portrait fallback */
+        @media (orientation: portrait) {
+            .content-container {
+                flex-direction: column;
+            }
+            
+            #video-container, #result-container {
+                width: 100%;
+            }
+            
+            #video-container {
+                padding-right: 0;
+                padding-bottom: 10px;
+            }
         }
     </style>
 </head>
@@ -79,25 +141,27 @@
     <h1>Cipher Text Detector</h1>
     <p>Point your camera at the encrypted Caesar cipher text (shift 3)</p>
     
-    <div id="video-container">
-        <video id="video" autoplay playsinline></video>
-    </div>
-    
-    <div>
+    <div class="button-container">
         <button id="start-btn">Start Camera</button>
         <button id="switch-btn">Switch Camera</button>
         <button id="capture-btn">Capture & Decode</button>
     </div>
     
-    <div id="result-container">
-        <h2>Results:</h2>
-        <p class="status" id="status">Waiting for text detection...</p>
+    <div class="content-container">
+        <div id="video-container">
+            <video id="video" autoplay playsinline></video>
+        </div>
         
-        <h3>Encrypted Text:</h3>
-        <div class="result-box" id="encrypted-text">No text detected yet</div>
-        
-        <h3>Decrypted Text:</h3>
-        <div class="result-box" id="decrypted-text">No text decoded yet</div>
+        <div id="result-container">
+            <h2>Results:</h2>
+            <p class="status" id="status">Waiting for text detection...</p>
+            
+            <h3>Encrypted Text:</h3>
+            <div class="result-box" id="encrypted-text">No text detected yet</div>
+            
+            <h3>Decrypted Text:</h3>
+            <div class="result-box" id="decrypted-text">No text decoded yet</div>
+        </div>
     </div>
     
     <canvas id="canvas" style="display:none;"></canvas>
@@ -120,9 +184,6 @@
         let frontCameraId = null;
         let currentCamera = 'back'; // Start with back camera
         let isProcessing = false;
-        
-        // Initialize Tesseract scheduler
-        const scheduler = Tesseract.createScheduler();
         
         // Function to start camera
         async function startCamera() {
@@ -150,12 +211,13 @@
                     frontCameraId = videoDevices[0].deviceId;
                 }
                 
-                // Default constraints for back camera
+                // Default constraints for back camera - optimized for landscape
                 const constraints = {
                     video: {
                         facingMode: 'environment',
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 }
+                        width: { ideal: 1920 },  // Higher width for landscape
+                        height: { ideal: 1080 }, // Corresponding height
+                        aspectRatio: { ideal: 16/9 } // Typical landscape aspect ratio
                     }
                 };
                 
@@ -174,6 +236,15 @@
                 video.srcObject = stream;
                 currentCamera = 'back';
                 
+                // Force landscape if possible
+                if (screen.orientation && screen.orientation.lock) {
+                    try {
+                        await screen.orientation.lock('landscape');
+                    } catch (err) {
+                        console.log('Orientation lock not supported or permission denied');
+                    }
+                }
+                
                 startButton.textContent = 'Camera Active';
                 statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
             } catch (err) {
@@ -189,8 +260,9 @@
                 
                 const constraints = {
                     video: {
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 }
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 },
+                        aspectRatio: { ideal: 16/9 }
                     }
                 };
                 
@@ -252,7 +324,13 @@
                 
                 // Set parameters for better OCR performance
                 await worker.setParameters({
-                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? '
+                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? ',
+                    tessjs_create_pdf: '0',
+                    tessjs_create_hocr: '0',
+                    tessjs_create_tsv: '0',
+                    tessjs_create_box: '0',
+                    tessjs_create_unlv: '0',
+                    tessjs_create_osd: '0'
                 });
                 
                 // Recognize text from image
@@ -304,10 +382,28 @@
             }).join('');
         }
         
+        // Function to handle orientation changes
+        function handleOrientationChange() {
+            // Adjust UI based on orientation
+            if (window.matchMedia("(orientation: landscape)").matches) {
+                document.querySelector('.content-container').style.flexDirection = 'row';
+                document.getElementById('video-container').style.width = '60%';
+                document.getElementById('result-container').style.width = '40%';
+            } else {
+                document.querySelector('.content-container').style.flexDirection = 'column';
+                document.getElementById('video-container').style.width = '100%';
+                document.getElementById('result-container').style.width = '100%';
+            }
+        }
+        
         // Event listeners
         startButton.addEventListener('click', startCamera);
         switchButton.addEventListener('click', switchCamera);
         captureButton.addEventListener('click', captureAndDecode);
+        window.addEventListener('orientationchange', handleOrientationChange);
+        
+        // Initial orientation setup
+        handleOrientationChange();
         
         // Start with back camera by default
         document.addEventListener('DOMContentLoaded', () => {
