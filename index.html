@@ -65,21 +65,30 @@
             pointer-events: none;
             padding: clamp(0.5rem, 2vw, 1rem);
             display: flex;
-            justify-content: center;
-            align-items: center;
+            align-items: flex-start;
         }
         
         #live-decrypted-text {
-            background: transparent;
+            background: #504945;
             color: #fabd2f;
-            padding: clamp(0.2rem, 1vw, 0.5rem);
+            border: 1px solid #fabd2f;
+            border-radius: 0.3rem;
+            padding: 0.5rem;
             font-weight: bold;
-            font-size: clamp(1rem, 3vw, 1.5rem);
-            text-shadow: 0 0 3px #fabd2f, 2px 2px 4px #3c3836;
             max-width: 100%;
             word-wrap: break-word;
             display: none;
-            text-align: center;
+            position: relative;
+        }
+        
+        #live-decrypted-text:after {
+            content: "▶";
+            position: absolute;
+            right: -0.8rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #504945;
+            font-size: 1rem;
         }
         
         #live-decrypted-text.success {
@@ -87,9 +96,8 @@
         }
         
         @keyframes flash {
-            0% { opacity: 1; }
-            50% { opacity: 0.5; }
-            100% { opacity: 1; }
+            0% { background: #fabd2f; color: #504945; }
+            100% { background: #504945; color: #fabd2f; }
         }
         
         .controls-container {
@@ -294,8 +302,8 @@
             await tesseractWorker.initialize('eng');
             await tesseractWorker.setParameters({
                 tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? ',
-                tessedit_pageseg_mode: 6,
-                tessedit_ocr_engine_mode: 1,
+                tessedit_pageseg_mode: 6, // PSM_SINGLE_BLOCK
+                tessedit_ocr_engine_mode: 1, // OEM_LSTM_ONLY
                 preserve_interword_spaces: '1'
             });
             return tesseractWorker;
@@ -304,6 +312,8 @@
         function preprocessImage(context, width, height) {
             const imageData = context.getImageData(0, 0, width, height);
             const data = imageData.data;
+            
+            // Grayscale
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
                 const g = data[i + 1];
@@ -311,9 +321,12 @@
                 const gray = 0.2989 * r + 0.5870 * g + 0.1140 * b;
                 data[i] = data[i + 1] = data[i + 2] = gray;
             }
+            
+            // Contrast enhancement (simple threshold)
             for (let i = 0; i < data.length; i += 4) {
                 data[i] = data[i + 1] = data[i + 2] = data[i] > 127 ? 255 : 0;
             }
+            
             context.putImageData(imageData, 0, 0);
         }
         
@@ -331,7 +344,7 @@
                 currentCamera = 'back';
                 startButton.textContent = 'Camera Active';
                 statusText.textContent = 'Camera ready. Toggle live mode to scan.';
-                await initTesseract();
+                await initTesseract(); // Preload Tesseract
             } catch (err) {
                 showError('Camera error', err);
                 statusText.textContent = 'Camera failed. Check permissions.';
@@ -373,17 +386,19 @@
                 return false;
             }
             liveDecryptedText.style.display = 'block';
-            const interval = window.innerWidth < 400 ? 1500 : 1000;
+            const interval = window.innerWidth < 400 ? 1500 : 1000; // Faster on bigger screens
             let lastProcessTime = 0;
             
             liveDetectionInterval = setInterval(async () => {
                 if (!liveMode || (frameSkip && Date.now() - lastProcessTime < interval)) return;
-                frameSkip = !frameSkip;
+                frameSkip = !frameSkip; // Skip every other frame if lagging
                 
                 try {
                     const startTime = Date.now();
-                    canvas.width = Math.round(video.videoWidth * 0.8);
+                    canvas.width = Math.round(video.videoWidth * 0.8); // Downscale for speed
                     canvas.height = Math.round(video.videoHeight * 0.8);
+                    
+                    // Crop to central 70%
                     const cropWidth = canvas.width * 0.7;
                     const cropHeight = canvas.height * 0.7;
                     const offsetX = (canvas.width - cropWidth) / 2;
@@ -397,6 +412,7 @@
                     let text = result.data.text.trim();
                     let confidence = result.data.confidence;
                     
+                    // Retry with stricter settings if confidence is low
                     if (confidence < 80 && text.length > 0) {
                         await tesseractWorker.setParameters({
                             tessedit_char_blacklist: '~`@#$%^&*()_+-={}[]|\\:;"\'<>,/'
