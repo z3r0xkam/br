@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cipher Text Detector Correct</title>
+    <title>Cipher Text Detector</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js"></script>
     <style>
         body {
@@ -283,461 +283,386 @@
     
     <script>
         // DOM elements
-const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const startButton = document.getElementById('start-btn');
-const switchButton = document.getElementById('switch-btn');
-const captureButton = document.getElementById('capture-btn');
-const statusText = document.getElementById('status');
-const encryptedTextDiv = document.getElementById('encrypted-text');
-const decryptedTextDiv = document.getElementById('decrypted-text');
-const errorMessage = document.getElementById('error-message');
-const cameraPermissions = document.getElementById('camera-permissions');
-const liveModeToggle = document.getElementById('live-mode-toggle');
-const liveDecryptedText = document.getElementById('live-decrypted-text');
-
-// Global variables
-let stream = null;
-let backCameraId = null;
-let frontCameraId = null;
-let currentCamera = 'back'; // Start with back camera
-let isProcessing = false;
-let liveMode = false;
-let liveDetectionInterval = null;
-let tesseractWorker = null;
-
-// Function to display detailed error message
-function showError(message, err) {
-    console.error(message, err);
-    errorMessage.textContent = `${message}: ${err.message || err}`;
-    errorMessage.style.display = 'block';
-    
-    // Show camera permissions message if it's likely a permissions issue
-    if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        cameraPermissions.style.display = 'block';
-    }
-}
-
-// Function to clear error message
-function clearError() {
-    errorMessage.textContent = '';
-    errorMessage.style.display = 'none';
-    cameraPermissions.style.display = 'none';
-}
-
-// Check if camera is supported
-function checkCameraSupport() {
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        showError('Camera not supported in this browser', { message: 'Please try using a modern browser like Chrome, Firefox, or Safari' });
-        return false;
-    }
-    return true;
-}
-
-// Initialize Tesseract worker
-async function initTesseract() {
-    if (tesseractWorker) {
-        return tesseractWorker;
-    }
-    
-    try {
-        // Create a new worker
-        tesseractWorker = await Tesseract.createWorker();
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('start-btn');
+        const switchButton = document.getElementById('switch-btn');
+        const captureButton = document.getElementById('capture-btn');
+        const statusText = document.getElementById('status');
+        const encryptedTextDiv = document.getElementById('encrypted-text');
+        const decryptedTextDiv = document.getElementById('decrypted-text');
+        const errorMessage = document.getElementById('error-message');
+        const cameraPermissions = document.getElementById('camera-permissions');
+        const liveModeToggle = document.getElementById('live-mode-toggle');
+        const liveDecryptedText = document.getElementById('live-decrypted-text');
         
-        // Load and initialize with English language
-        await tesseractWorker.loadLanguage('eng');
-        await tesseractWorker.initialize('eng');
+        // Global variables
+        let stream = null;
+        let backCameraId = null;
+        let frontCameraId = null;
+        let currentCamera = 'back'; // Start with back camera
+        let isProcessing = false;
+        let liveMode = false;
+        let liveDetectionInterval = null;
+        let tesseractWorker = null;
         
-        // Set enhanced parameters for better OCR performance
-        await tesseractWorker.setParameters({
-            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,?\'"-_() ',
-            tessedit_pageseg_mode: '6', // Assume a single uniform block of text
-            tessedit_do_invert: '0',    // Don't invert image
-            tessjs_create_hocr: '0',    // Don't create HOCR, reduces processing time
-            tessjs_create_tsv: '0',     // Don't create TSV, reduces processing time
-            tessjs_create_box: '0',     // Don't create box file, reduces processing time
-            tessjs_create_unlv: '0',    // Don't create UNLV, reduces processing time
-            tessjs_create_osd: '0',     // Don't create OSD, reduces processing time
+        // Function to display detailed error message
+        function showError(message, err) {
+            console.error(message, err);
+            errorMessage.textContent = `${message}: ${err.message || err}`;
+            errorMessage.style.display = 'block';
             
-            // Improve accuracy for text detection
-            textord_min_linesize: '2.5', // Minimum line height
-            tessedit_ocr_engine_mode: '2', // Use LSTM neural network only
-        });
-        
-        return tesseractWorker;
-    } catch (err) {
-        showError('Error initializing Tesseract', err);
-        return null;
-    }
-}
-
-// Function to start camera with simplified constraints
-async function startCamera() {
-    if (!checkCameraSupport()) return;
-    
-    clearError();
-    statusText.textContent = "Starting camera...";
-    
-    try {
-        // Stop any existing stream
-        if (stream) {
-            stream.getTracks().forEach(track => track.stop());
+            // Show camera permissions message if it's likely a permissions issue
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                cameraPermissions.style.display = 'block';
+            }
         }
         
-        // Simple back camera request first
-        try {
-            stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment' },
-                audio: false
-            });
-            video.srcObject = stream;
-            await video.play(); // Explicitly try to play
-            currentCamera = 'back';
-            startButton.textContent = 'Camera Active';
-            statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
-            
-            // Initialize Tesseract for possible live mode
-            await initTesseract();
-            
-            return;
-        } catch (err) {
-            console.log('Could not access back camera, trying any camera:', err);
+        // Function to clear error message
+        function clearError() {
+            errorMessage.textContent = '';
+            errorMessage.style.display = 'none';
+            cameraPermissions.style.display = 'none';
         }
         
-        // If back camera fails, try with any camera
-        stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: false
-        });
-        video.srcObject = stream;
-        await video.play(); // Explicitly try to play
-        currentCamera = 'unknown';
-        startButton.textContent = 'Camera Active';
-        statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
-        
-        // Initialize Tesseract for possible live mode
-        await initTesseract();
-    } catch (err) {
-        showError('Error accessing camera', err);
-        statusText.textContent = 'Failed to start camera. Check permissions.';
-    }
-}
-
-// Function to switch camera (between front and back)
-async function switchCamera() {
-    if (!checkCameraSupport()) return;
-    clearError();
-    
-    try {
-        const newFacingMode = currentCamera === 'back' ? 'user' : 'environment';
-        
-        // Stop current stream
-        if (stream) {
-            stream.getTracks().forEach(track => track.stop());
+        // Check if camera is supported
+        function checkCameraSupport() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showError('Camera not supported in this browser', { message: 'Please try using a modern browser like Chrome, Firefox, or Safari' });
+                return false;
+            }
+            return true;
         }
         
-        // Try to switch camera
-        stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: newFacingMode },
-            audio: false
-        });
-        
-        video.srcObject = stream;
-        await video.play(); // Explicitly try to play
-        currentCamera = currentCamera === 'back' ? 'front' : 'back';
-        
-        statusText.textContent = `Switched to ${currentCamera} camera. Click "Capture & Decode" to detect text.`;
-    } catch (err) {
-        showError('Error switching camera', err);
-    }
-}
-
-// Caesar cipher decryption function (shift is how many letters to shift back)
-function caesarDecrypt(text, shift) {
-    return text.split('').map(char => {
-        // Check if character is a letter
-        if (/[a-zA-Z]/.test(char)) {
-            // Get ASCII code
-            const code = char.charCodeAt(0);
-            let shiftedCode;
-            
-            // Shift based on whether character is uppercase or lowercase
-            if (code >= 65 && code <= 90) { // Uppercase
-                shiftedCode = ((code - 65 - shift + 26) % 26) + 65;
-            } else if (code >= 97 && code <= 122) { // Lowercase
-                shiftedCode = ((code - 97 - shift + 26) % 26) + 97;
+        // Initialize Tesseract worker
+        async function initTesseract() {
+            if (tesseractWorker) {
+                return tesseractWorker;
             }
             
-            return String.fromCharCode(shiftedCode);
-        }
-        // Return non-alphabetic characters unchanged
-        return char;
-    }).join('');
-}
-
-// Function to preprocess image for better OCR
-function preprocessImage(canvas, ctx) {
-    // Get the pixel data from the canvas
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-    
-    // Convert to grayscale and increase contrast
-    for (let i = 0; i < data.length; i += 4) {
-        // Convert to grayscale using luminance formula
-        const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-        
-        // Apply threshold to create high contrast black and white
-        const threshold = 128;
-        const newValue = gray > threshold ? 255 : 0;
-        
-        // Set RGB values to the new binary value
-        data[i] = data[i + 1] = data[i + 2] = newValue;
-    }
-    
-    // Put the modified image data back on the canvas
-    ctx.putImageData(imageData, 0, 0);
-    
-    return canvas;
-}
-
-// Function to capture image and recognize text
-async function captureAndDecode() {
-    if (!stream) {
-        statusText.textContent = "Camera not started. Please start camera first.";
-        return;
-    }
-    
-    if (isProcessing) {
-        statusText.textContent = "Still processing previous image, please wait...";
-        return;
-    }
-    
-    try {
-        isProcessing = true;
-        statusText.textContent = "Processing image...";
-        
-        // Set canvas dimensions to match video
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        
-        // Draw video frame to canvas
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        // Apply image preprocessing
-        preprocessImage(canvas, ctx);
-        
-        // Get image data from canvas
-        const imageData = canvas.toDataURL('image/png');
-        
-        // Recognize text using Tesseract.js
-        statusText.textContent = "Detecting text...";
-        
-        // Get worker
-        const worker = await initTesseract();
-        
-        // Try recognition with multiple settings if needed
-        let detectedText = "";
-        let attempts = 0;
-        const maxAttempts = 2;
-        let result;
-        
-        while (attempts < maxAttempts && (!detectedText || detectedText.length < 3)) {
-            attempts++;
-            
-            // Adjust parameters based on attempt number
-            if (attempts > 1) {
-                // For second attempt, try different segmentation mode
-                await worker.setParameters({
-                    tessedit_pageseg_mode: '4', // Assume a single column of text of variable sizes
+            try {
+                // Create a new worker
+                tesseractWorker = await Tesseract.createWorker();
+                
+                // Load and initialize with English language
+                await tesseractWorker.loadLanguage('eng');
+                await tesseractWorker.initialize('eng');
+                
+                // Set parameters for better OCR performance
+                await tesseractWorker.setParameters({
+                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? '
                 });
-                statusText.textContent = "Retrying with different settings...";
-            }
-            
-            // Recognize text from image
-            result = await worker.recognize(imageData);
-            detectedText = result.data.text.trim();
-            
-            // If confidence is too low, try again with different settings
-            if (result.data.confidence < 60 && attempts < maxAttempts) {
-                continue;
+                
+                return tesseractWorker;
+            } catch (err) {
+                showError('Error initializing Tesseract', err);
+                return null;
             }
         }
         
-        if (detectedText.length > 0) {
-            encryptedTextDiv.textContent = detectedText;
+        // Function to start camera with simplified constraints
+        async function startCamera() {
+            if (!checkCameraSupport()) return;
             
-            // Decrypt using Caesar cipher (shift 3)
-            const decryptedText = caesarDecrypt(detectedText, 3);
-            decryptedTextDiv.textContent = decryptedText;
+            clearError();
+            statusText.textContent = "Starting camera...";
             
-            statusText.textContent = `Text detected and decrypted! (Confidence: ${result.data.confidence.toFixed(1)}%)`;
-        } else {
-            statusText.textContent = "No text detected. Try again with better lighting or positioning.";
+            try {
+                // Stop any existing stream
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                
+                // Simple back camera request first
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: 'environment' },
+                        audio: false
+                    });
+                    video.srcObject = stream;
+                    await video.play(); // Explicitly try to play
+                    currentCamera = 'back';
+                    startButton.textContent = 'Camera Active';
+                    statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
+                    
+                    // Initialize Tesseract for possible live mode
+                    await initTesseract();
+                    
+                    return;
+                } catch (err) {
+                    console.log('Could not access back camera, trying any camera:', err);
+                }
+                
+                // If back camera fails, try with any camera
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: false
+                });
+                video.srcObject = stream;
+                await video.play(); // Explicitly try to play
+                currentCamera = 'unknown';
+                startButton.textContent = 'Camera Active';
+                statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
+                
+                // Initialize Tesseract for possible live mode
+                await initTesseract();
+            } catch (err) {
+                showError('Error accessing camera', err);
+                statusText.textContent = 'Failed to start camera. Check permissions.';
+            }
         }
-    } catch (err) {
-        showError('Error in text recognition', err);
-        statusText.textContent = "Error processing image. See error message for details.";
-    } finally {
-        isProcessing = false;
-    }
-}
-
-// Function to handle live decryption
-async function startLiveDecryption() {
-    if (!stream) {
-        statusText.textContent = "Camera not started. Please start camera first.";
-        return false;
-    }
-    
-    // Clear previous interval if exists
-    if (liveDetectionInterval) {
-        clearInterval(liveDetectionInterval);
-    }
-    
-    // Initialize Tesseract if not already done
-    if (!tesseractWorker) {
-        try {
-            await initTesseract();
-        } catch (err) {
-            showError('Error initializing Tesseract for live mode', err);
-            return false;
-        }
-    }
-    
-    // Show live decryption overlay
-    liveDecryptedText.style.display = 'block';
-    
-    // Store the previous detected text to avoid flickering
-    let previousText = "";
-    let confidenceThreshold = 65;  // Minimum confidence to accept the result
-    
-    // Start detection interval
-    let processing = false;
-    liveDetectionInterval = setInterval(async () => {
-        if (processing || !liveMode) return;
         
-        try {
-            processing = true;
+        // Function to switch camera (between front and back)
+        async function switchCamera() {
+            if (!checkCameraSupport()) return;
+            clearError();
             
-            // Set canvas dimensions to match video
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
+            try {
+                const newFacingMode = currentCamera === 'back' ? 'user' : 'environment';
+                
+                // Stop current stream
+                if (stream) {
+                    stream.getTracks().forEach(track => track.stop());
+                }
+                
+                // Try to switch camera
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: newFacingMode },
+                    audio: false
+                });
+                
+                video.srcObject = stream;
+                await video.play(); // Explicitly try to play
+                currentCamera = currentCamera === 'back' ? 'front' : 'back';
+                
+                statusText.textContent = `Switched to ${currentCamera} camera. Click "Capture & Decode" to detect text.`;
+            } catch (err) {
+                showError('Error switching camera', err);
+            }
+        }
+        
+        // Caesar cipher decryption function (shift is how many letters to shift back)
+        function caesarDecrypt(text, shift) {
+            return text.split('').map(char => {
+                // Check if character is a letter
+                if (/[a-zA-Z]/.test(char)) {
+                    // Get ASCII code
+                    const code = char.charCodeAt(0);
+                    let shiftedCode;
+                    
+                    // Shift based on whether character is uppercase or lowercase
+                    if (code >= 65 && code <= 90) { // Uppercase
+                        shiftedCode = ((code - 65 - shift + 26) % 26) + 65;
+                    } else if (code >= 97 && code <= 122) { // Lowercase
+                        shiftedCode = ((code - 97 - shift + 26) % 26) + 97;
+                    }
+                    
+                    return String.fromCharCode(shiftedCode);
+                }
+                // Return non-alphabetic characters unchanged
+                return char;
+            }).join('');
+        }
+        
+        // Function to capture image and recognize text
+        async function captureAndDecode() {
+            if (!stream) {
+                statusText.textContent = "Camera not started. Please start camera first.";
+                return;
+            }
             
-            // Draw video frame to canvas
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            if (isProcessing) {
+                statusText.textContent = "Still processing previous image, please wait...";
+                return;
+            }
             
-            // Apply image preprocessing
-            preprocessImage(canvas, ctx);
+            try {
+                isProcessing = true;
+                statusText.textContent = "Processing image...";
+                
+                // Set canvas dimensions to match video
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                
+                // Draw video frame to canvas
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                // Get image data from canvas
+                const imageData = canvas.toDataURL('image/png');
+                
+                // Recognize text using Tesseract.js
+                statusText.textContent = "Detecting text...";
+                
+                // Get worker
+                const worker = await initTesseract();
+                
+                // Recognize text from image
+                const result = await worker.recognize(imageData);
+                const detectedText = result.data.text.trim();
+                
+                if (detectedText.length > 0) {
+                    encryptedTextDiv.textContent = detectedText;
+                    
+                    // Decrypt using Caesar cipher (shift 3)
+                    const decryptedText = caesarDecrypt(detectedText, 3);
+                    decryptedTextDiv.textContent = decryptedText;
+                    
+                    statusText.textContent = "Text detected and decrypted!";
+                } else {
+                    statusText.textContent = "No text detected. Try again with better lighting or positioning.";
+                }
+            } catch (err) {
+                showError('Error in text recognition', err);
+                statusText.textContent = "Error processing image. See error message for details.";
+            } finally {
+                isProcessing = false;
+            }
+        }
+        
+        // Function to handle live decryption
+        async function startLiveDecryption() {
+            if (!stream) {
+                statusText.textContent = "Camera not started. Please start camera first.";
+                return false;
+            }
             
-            // Get image data from canvas
-            const imageData = canvas.toDataURL('image/png');
+            // Clear previous interval if exists
+            if (liveDetectionInterval) {
+                clearInterval(liveDetectionInterval);
+            }
             
-            // Recognize text using Tesseract.js
-            const result = await tesseractWorker.recognize(imageData);
-            const detectedText = result.data.text.trim();
+            // Initialize Tesseract if not already done
+            if (!tesseractWorker) {
+                try {
+                    await initTesseract();
+                } catch (err) {
+                    showError('Error initializing Tesseract for live mode', err);
+                    return false;
+                }
+            }
             
-            if (detectedText.length > 0 && result.data.confidence > confidenceThreshold) {
-                // Decrypt using Caesar cipher (shift 3)
-                const decryptedText = caesarDecrypt(detectedText, 3);
-                liveDecryptedText.textContent = decryptedText;
-                previousText = detectedText;
-            } else if (previousText.length > 0) {
-                // Keep showing previous text if confidence is low
-                // to prevent flickering with low-confidence results
-                liveDecryptedText.textContent = caesarDecrypt(previousText, 3) + " (last confident result)";
+            // Show live decryption overlay
+            liveDecryptedText.style.display = 'block';
+            
+            // Start detection interval
+            let processing = false;
+            liveDetectionInterval = setInterval(async () => {
+                if (processing || !liveMode) return;
+                
+                try {
+                    processing = true;
+                    
+                    // Set canvas dimensions to match video
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    
+                    // Draw video frame to canvas
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    
+                    // Get image data from canvas
+                    const imageData = canvas.toDataURL('image/png');
+                    
+                    // Recognize text using Tesseract.js
+                    const result = await tesseractWorker.recognize(imageData);
+                    const detectedText = result.data.text.trim();
+                    
+                    if (detectedText.length > 0) {
+                        // Decrypt using Caesar cipher (shift 3)
+                        const decryptedText = caesarDecrypt(detectedText, 3);
+                        liveDecryptedText.textContent = decryptedText;
+                    } else {
+                        liveDecryptedText.textContent = "No text detected";
+                    }
+                } catch (err) {
+                    console.error('Live decryption error:', err);
+                    liveDecryptedText.textContent = "Error detecting text";
+                } finally {
+                    processing = false;
+                }
+            }, 1000); // Check every second
+            
+            return true;
+        }
+        
+        // Function to stop live decryption
+        function stopLiveDecryption() {
+            if (liveDetectionInterval) {
+                clearInterval(liveDetectionInterval);
+                liveDetectionInterval = null;
+            }
+            
+            liveDecryptedText.style.display = 'none';
+        }
+        
+        // Function to toggle live mode
+        async function toggleLiveMode() {
+            liveMode = liveModeToggle.checked;
+            
+            if (liveMode) {
+                statusText.textContent = "Live decryption mode activated";
+                const success = await startLiveDecryption();
+                if (!success) {
+                    liveModeToggle.checked = false;
+                    liveMode = false;
+                }
             } else {
-                liveDecryptedText.textContent = "No text detected";
+                stopLiveDecryption();
+                statusText.textContent = "Live decryption mode deactivated";
             }
-        } catch (err) {
-            console.error('Live decryption error:', err);
-            liveDecryptedText.textContent = "Error detecting text";
-        } finally {
-            processing = false;
         }
-    }, 800); // Slightly slower interval for more processing time
-    
-    return true;
-}
-
-// Function to stop live decryption
-function stopLiveDecryption() {
-    if (liveDetectionInterval) {
-        clearInterval(liveDetectionInterval);
-        liveDetectionInterval = null;
-    }
-    
-    liveDecryptedText.style.display = 'none';
-}
-
-// Function to toggle live mode
-async function toggleLiveMode() {
-    liveMode = liveModeToggle.checked;
-    
-    if (liveMode) {
-        statusText.textContent = "Live decryption mode activated";
-        const success = await startLiveDecryption();
-        if (!success) {
-            liveModeToggle.checked = false;
-            liveMode = false;
+        
+        // Function to handle orientation changes
+        function handleOrientationChange() {
+            // Adjust UI based on orientation
+            if (window.matchMedia("(orientation: landscape)").matches) {
+                document.querySelector('.content-container').style.flexDirection = 'row';
+                document.getElementById('video-container').style.width = '60%';
+                document.getElementById('result-container').style.width = '40%';
+            } else {
+                document.querySelector('.content-container').style.flexDirection = 'column';
+                document.getElementById('video-container').style.width = '100%';
+                document.getElementById('result-container').style.width = '100%';
+            }
         }
-    } else {
-        stopLiveDecryption();
-        statusText.textContent = "Live decryption mode deactivated";
-    }
-}
-
-// Function to handle orientation changes
-function handleOrientationChange() {
-    // Adjust UI based on orientation
-    if (window.matchMedia("(orientation: landscape)").matches) {
-        document.querySelector('.content-container').style.flexDirection = 'row';
-        document.getElementById('video-container').style.width = '60%';
-        document.getElementById('result-container').style.width = '40%';
-    } else {
-        document.querySelector('.content-container').style.flexDirection = 'column';
-        document.getElementById('video-container').style.width = '100%';
-        document.getElementById('result-container').style.width = '100%';
-    }
-}
-
-// Clean up resources when page unloads
-window.addEventListener('beforeunload', () => {
-    // Stop camera stream
-    if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-    }
-    
-    // Terminate Tesseract worker
-    if (tesseractWorker) {
-        tesseractWorker.terminate();
-    }
-    
-    // Clear intervals
-    if (liveDetectionInterval) {
-        clearInterval(liveDetectionInterval);
-    }
-});
-
-// Event listeners
-startButton.addEventListener('click', startCamera);
-switchButton.addEventListener('click', switchCamera);
-captureButton.addEventListener('click', captureAndDecode);
-liveModeToggle.addEventListener('change', toggleLiveMode);
-window.addEventListener('orientationchange', handleOrientationChange);
-
-// Handle video play failures
-video.addEventListener('error', (e) => {
-    showError('Video error', e.error || new Error('Unknown video error'));
-});
-
-// Initial orientation setup
-handleOrientationChange();
-
-// Auto-start camera with a delay to allow page to load
-document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(startCamera, 500);
-});
+        
+        // Clean up resources when page unloads
+        window.addEventListener('beforeunload', () => {
+            // Stop camera stream
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            
+            // Terminate Tesseract worker
+            if (tesseractWorker) {
+                tesseractWorker.terminate();
+            }
+            
+            // Clear intervals
+            if (liveDetectionInterval) {
+                clearInterval(liveDetectionInterval);
+            }
+        });
+        
+        // Event listeners
+        startButton.addEventListener('click', startCamera);
+        switchButton.addEventListener('click', switchCamera);
+        captureButton.addEventListener('click', captureAndDecode);
+        liveModeToggle.addEventListener('change', toggleLiveMode);
+        window.addEventListener('orientationchange', handleOrientationChange);
+        
+        // Handle video play failures
+        video.addEventListener('error', (e) => {
+            showError('Video error', e.error || new Error('Unknown video error'));
+        });
+        
+        // Initial orientation setup
+        handleOrientationChange();
+        
+        // Auto-start camera with a delay to allow page to load
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(startCamera, 500);
+        });
     </script>
 </body>
 </html>
