@@ -10,8 +10,8 @@
             font-family: 'Inconsolata', monospace;
             margin: 0;
             padding: clamp(0.5rem, 2vw, 1rem);
-            background: #3c3836; /* Agnoster dark gray */
-            color: #ebdbb2; /* Agnoster beige */
+            background: #3c3836;
+            color: #ebdbb2;
             display: flex;
             flex-direction: column;
             min-height: 100vh;
@@ -21,7 +21,7 @@
         h1 {
             font-size: clamp(1.5rem, 4vw, 2rem);
             font-weight: 700;
-            color: #83a598; /* Agnoster cyan */
+            color: #83a598;
             margin: 0 0 0.5rem;
             text-align: center;
         }
@@ -30,7 +30,7 @@
             font-size: clamp(0.9rem, 2.5vw, 1.2rem);
             margin: 0 0 1rem;
             text-align: center;
-            color: #928374; /* Agnoster muted gray */
+            color: #928374;
         }
         
         .content-container {
@@ -51,7 +51,7 @@
             width: 100%;
             height: auto;
             max-height: 60vh;
-            border: 2px solid #504945; /* Agnoster darker gray */
+            border: 2px solid #504945;
             border-radius: 0.5rem;
             object-fit: cover;
         }
@@ -69,8 +69,8 @@
         }
         
         #live-decrypted-text {
-            background: #504945; /* Agnoster darker gray */
-            color: #fabd2f; /* Agnoster yellow */
+            background: #504945;
+            color: #fabd2f;
             border: 1px solid #fabd2f;
             border-radius: 0.3rem;
             padding: 0.5rem;
@@ -91,9 +91,18 @@
             font-size: 1rem;
         }
         
+        #live-decrypted-text.success {
+            animation: flash 0.3s;
+        }
+        
+        @keyframes flash {
+            0% { background: #fabd2f; color: #504945; }
+            100% { background: #504945; color: #fabd2f; }
+        }
+        
         .controls-container {
             padding: clamp(0.5rem, 2vw, 1rem);
-            background: #504945; /* Agnoster darker gray */
+            background: #504945;
             border-radius: 0.5rem;
             display: flex;
             flex-direction: column;
@@ -119,7 +128,7 @@
         }
         
         button {
-            background: #83a598; /* Agnoster cyan */
+            background: #83a598;
             color: #3c3836;
             border: none;
             padding: clamp(0.5rem, 2vw, 0.75rem) clamp(1rem, 3vw, 1.5rem);
@@ -132,7 +141,7 @@
         }
         
         button:hover, button:focus {
-            background: #8ec07c; /* Agnoster green */
+            background: #8ec07c;
             outline: none;
         }
         
@@ -161,7 +170,7 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: #928374; /* Agnoster muted gray */
+            background: #928374;
             border-radius: 1rem;
             transition: 0.3s;
         }
@@ -179,7 +188,7 @@
         }
         
         input:checked + .slider {
-            background: #d3869b; /* Agnoster magenta */
+            background: #d3869b;
         }
         
         input:checked + .slider:before {
@@ -193,7 +202,7 @@
         }
         
         #error-message {
-            color: #fb4934; /* Agnoster red */
+            color: #fb4934;
             font-weight: bold;
             padding: 0.5rem;
             background: rgba(251, 73, 52, 0.2);
@@ -273,7 +282,8 @@
         let liveMode = false;
         let liveDetectionInterval = null;
         let tesseractWorker = null;
-        
+        let frameSkip = false;
+
         function showError(message, err) {
             console.error(message, err);
             errorMessage.textContent = `${message}: ${err.message || err}`;
@@ -291,9 +301,33 @@
             await tesseractWorker.loadLanguage('eng');
             await tesseractWorker.initialize('eng');
             await tesseractWorker.setParameters({
-                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? '
+                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? ',
+                tessedit_pageseg_mode: 6, // PSM_SINGLE_BLOCK
+                tessedit_ocr_engine_mode: 1, // OEM_LSTM_ONLY
+                preserve_interword_spaces: '1'
             });
             return tesseractWorker;
+        }
+        
+        function preprocessImage(context, width, height) {
+            const imageData = context.getImageData(0, 0, width, height);
+            const data = imageData.data;
+            
+            // Grayscale
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                const gray = 0.2989 * r + 0.5870 * g + 0.1140 * b;
+                data[i] = data[i + 1] = data[i + 2] = gray;
+            }
+            
+            // Contrast enhancement (simple threshold)
+            for (let i = 0; i < data.length; i += 4) {
+                data[i] = data[i + 1] = data[i + 2] = data[i] > 127 ? 255 : 0;
+            }
+            
+            context.putImageData(imageData, 0, 0);
         }
         
         async function startCamera() {
@@ -310,6 +344,7 @@
                 currentCamera = 'back';
                 startButton.textContent = 'Camera Active';
                 statusText.textContent = 'Camera ready. Toggle live mode to scan.';
+                await initTesseract(); // Preload Tesseract
             } catch (err) {
                 showError('Camera error', err);
                 statusText.textContent = 'Camera failed. Check permissions.';
@@ -350,19 +385,56 @@
                 statusText.textContent = "Start camera first!";
                 return false;
             }
-            await initTesseract();
             liveDecryptedText.style.display = 'block';
-            const interval = window.innerWidth < 400 ? 2000 : 1500; // Slower on tiny screens
+            const interval = window.innerWidth < 400 ? 1500 : 1000; // Faster on bigger screens
+            let lastProcessTime = 0;
+            
             liveDetectionInterval = setInterval(async () => {
-                if (!liveMode) return;
+                if (!liveMode || (frameSkip && Date.now() - lastProcessTime < interval)) return;
+                frameSkip = !frameSkip; // Skip every other frame if lagging
+                
                 try {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const startTime = Date.now();
+                    canvas.width = Math.round(video.videoWidth * 0.8); // Downscale for speed
+                    canvas.height = Math.round(video.videoHeight * 0.8);
+                    
+                    // Crop to central 70%
+                    const cropWidth = canvas.width * 0.7;
+                    const cropHeight = canvas.height * 0.7;
+                    const offsetX = (canvas.width - cropWidth) / 2;
+                    const offsetY = (canvas.height - cropHeight) / 2;
+                    
+                    ctx.drawImage(video, offsetX / 0.8, offsetY / 0.8, cropWidth / 0.8, cropHeight / 0.8, 0, 0, cropWidth, cropHeight);
+                    preprocessImage(ctx, cropWidth, cropHeight);
+                    
                     const imageData = canvas.toDataURL('image/png');
-                    const result = await tesseractWorker.recognize(imageData);
-                    const text = result.data.text.trim();
-                    liveDecryptedText.textContent = text ? caesarDecrypt(text, 3) : "No text detected";
+                    let result = await tesseractWorker.recognize(imageData);
+                    let text = result.data.text.trim();
+                    let confidence = result.data.confidence;
+                    
+                    // Retry with stricter settings if confidence is low
+                    if (confidence < 80 && text.length > 0) {
+                        await tesseractWorker.setParameters({
+                            tessedit_char_blacklist: '~`@#$%^&*()_+-={}[]|\\:;"\'<>,/'
+                        });
+                        result = await tesseractWorker.recognize(imageData);
+                        text = result.data.text.trim();
+                        confidence = result.data.confidence;
+                        await tesseractWorker.setParameters({ tessedit_char_blacklist: '' });
+                    }
+                    
+                    if (text) {
+                        const decrypted = caesarDecrypt(text, 3);
+                        liveDecryptedText.textContent = decrypted;
+                        statusText.textContent = `Scanning… ${Math.round(confidence)}% confidence`;
+                        if (confidence > 85) liveDecryptedText.classList.add('success');
+                        setTimeout(() => liveDecryptedText.classList.remove('success'), 300);
+                    } else {
+                        liveDecryptedText.textContent = "No text detected";
+                        statusText.textContent = "Scanning…";
+                    }
+                    
+                    lastProcessTime = Date.now();
                 } catch (err) {
                     liveDecryptedText.textContent = "Detection error";
                     console.error(err);
