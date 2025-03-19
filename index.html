@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cipher Text Detector</title>
+    <title>Cipher Text 1</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js"></script>
     <style>
         body {
@@ -135,11 +135,32 @@
                 padding-bottom: 10px;
             }
         }
+        
+        #error-message {
+            color: red;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        
+        #camera-permissions {
+            background-color: #ffe58f;
+            border: 1px solid #ffc53d;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            display: none;
+        }
     </style>
 </head>
 <body>
     <h1>Cipher Text Detector</h1>
     <p>Point your camera at the encrypted Caesar cipher text (shift 3)</p>
+    
+    <div id="camera-permissions">
+        Please allow camera access when prompted. If you denied access, please click the camera icon in your address bar and allow access.
+    </div>
+    
+    <div id="error-message"></div>
     
     <div class="button-container">
         <button id="start-btn">Start Camera</button>
@@ -149,12 +170,12 @@
     
     <div class="content-container">
         <div id="video-container">
-            <video id="video" autoplay playsinline></video>
+            <video id="video" autoplay playsinline muted></video>
         </div>
         
         <div id="result-container">
             <h2>Results:</h2>
-            <p class="status" id="status">Waiting for text detection...</p>
+            <p class="status" id="status">Waiting for camera to start...</p>
             
             <h3>Encrypted Text:</h3>
             <div class="result-box" id="encrypted-text">No text detected yet</div>
@@ -177,6 +198,8 @@
         const statusText = document.getElementById('status');
         const encryptedTextDiv = document.getElementById('encrypted-text');
         const decryptedTextDiv = document.getElementById('decrypted-text');
+        const errorMessage = document.getElementById('error-message');
+        const cameraPermissions = document.getElementById('camera-permissions');
         
         // Global variables
         let stream = null;
@@ -185,118 +208,115 @@
         let currentCamera = 'back'; // Start with back camera
         let isProcessing = false;
         
-        // Function to start camera
+        // Function to display detailed error message
+        function showError(message, err) {
+            console.error(message, err);
+            errorMessage.textContent = `${message}: ${err.message || err}`;
+            errorMessage.style.display = 'block';
+            
+            // Show camera permissions message if it's likely a permissions issue
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                cameraPermissions.style.display = 'block';
+            }
+        }
+        
+        // Function to clear error message
+        function clearError() {
+            errorMessage.textContent = '';
+            errorMessage.style.display = 'none';
+            cameraPermissions.style.display = 'none';
+        }
+        
+        // Check if camera is supported
+        function checkCameraSupport() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showError('Camera not supported in this browser', { message: 'Please try using a modern browser like Chrome, Firefox, or Safari' });
+                return false;
+            }
+            return true;
+        }
+        
+        // Function to start camera with simplified constraints
         async function startCamera() {
+            if (!checkCameraSupport()) return;
+            
+            clearError();
+            statusText.textContent = "Starting camera...";
+            
             try {
-                // Get list of video devices
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoDevices = devices.filter(device => device.kind === 'videoinput');
-                
-                // Try to identify back and front cameras
-                for (const device of videoDevices) {
-                    const label = device.label.toLowerCase();
-                    if (label.includes('back') || label.includes('rear') || label.includes('environment')) {
-                        backCameraId = device.deviceId;
-                    } else if (label.includes('front') || label.includes('face') || label.includes('user')) {
-                        frontCameraId = device.deviceId;
-                    }
-                }
-                
-                // If we couldn't identify cameras by label, make educated guesses
-                if (videoDevices.length >= 2 && !backCameraId && !frontCameraId) {
-                    backCameraId = videoDevices[0].deviceId;
-                    frontCameraId = videoDevices[1].deviceId;
-                } else if (videoDevices.length === 1) {
-                    backCameraId = videoDevices[0].deviceId;
-                    frontCameraId = videoDevices[0].deviceId;
-                }
-                
-                // Default constraints for back camera - optimized for landscape
-                const constraints = {
-                    video: {
-                        facingMode: 'environment',
-                        width: { ideal: 1920 },  // Higher width for landscape
-                        height: { ideal: 1080 }, // Corresponding height
-                        aspectRatio: { ideal: 16/9 } // Typical landscape aspect ratio
-                    }
-                };
-                
-                // If we have an explicit device ID, use it
-                if (backCameraId) {
-                    constraints.video.deviceId = { exact: backCameraId };
-                    delete constraints.video.facingMode;
-                }
-                
-                // Get stream
+                // Stop any existing stream
                 if (stream) {
                     stream.getTracks().forEach(track => track.stop());
                 }
                 
-                stream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = stream;
-                currentCamera = 'back';
-                
-                // Force landscape if possible
-                if (screen.orientation && screen.orientation.lock) {
-                    try {
-                        await screen.orientation.lock('landscape');
-                    } catch (err) {
-                        console.log('Orientation lock not supported or permission denied');
-                    }
+                // Simple back camera request first
+                try {
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: 'environment' },
+                        audio: false
+                    });
+                    video.srcObject = stream;
+                    await video.play(); // Explicitly try to play
+                    currentCamera = 'back';
+                    startButton.textContent = 'Camera Active';
+                    statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
+                    return;
+                } catch (err) {
+                    console.log('Could not access back camera, trying any camera:', err);
                 }
                 
+                // If back camera fails, try with any camera
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: true,
+                    audio: false
+                });
+                video.srcObject = stream;
+                await video.play(); // Explicitly try to play
+                currentCamera = 'unknown';
                 startButton.textContent = 'Camera Active';
                 statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
             } catch (err) {
-                console.error('Error accessing the camera:', err);
-                statusText.textContent = 'Error accessing camera: ' + err.message;
+                showError('Error accessing camera', err);
+                statusText.textContent = 'Failed to start camera. Check permissions.';
             }
         }
         
         // Function to switch camera (between front and back)
         async function switchCamera() {
+            if (!checkCameraSupport()) return;
+            clearError();
+            
             try {
-                const newCamera = currentCamera === 'back' ? 'front' : 'back';
+                const newFacingMode = currentCamera === 'back' ? 'user' : 'environment';
                 
-                const constraints = {
-                    video: {
-                        width: { ideal: 1920 },
-                        height: { ideal: 1080 },
-                        aspectRatio: { ideal: 16/9 }
-                    }
-                };
-                
-                if (newCamera === 'back') {
-                    if (backCameraId) {
-                        constraints.video.deviceId = { exact: backCameraId };
-                    } else {
-                        constraints.video.facingMode = 'environment';
-                    }
-                } else {
-                    if (frontCameraId) {
-                        constraints.video.deviceId = { exact: frontCameraId };
-                    } else {
-                        constraints.video.facingMode = 'user';
-                    }
-                }
-                
+                // Stop current stream
                 if (stream) {
                     stream.getTracks().forEach(track => track.stop());
                 }
                 
-                stream = await navigator.mediaDevices.getUserMedia(constraints);
-                video.srcObject = stream;
-                currentCamera = newCamera;
+                // Try to switch camera
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: newFacingMode },
+                    audio: false
+                });
                 
-                statusText.textContent = `Switched to ${newCamera} camera. Click "Capture & Decode" to detect text.`;
+                video.srcObject = stream;
+                await video.play(); // Explicitly try to play
+                currentCamera = currentCamera === 'back' ? 'front' : 'back';
+                
+                statusText.textContent = `Switched to ${currentCamera} camera. Click "Capture & Decode" to detect text.`;
             } catch (err) {
-                console.error('Error switching camera:', err);
-                statusText.textContent = 'Error switching camera: ' + err.message;
+                showError('Error switching camera', err);
             }
         }
         
         // Function to capture image and recognize text
         async function captureAndDecode() {
+            if (!stream) {
+                statusText.textContent = "Camera not started. Please start camera first.";
+                return;
+            }
+            
             if (isProcessing) {
                 statusText.textContent = "Still processing previous image, please wait...";
                 return;
@@ -320,17 +340,15 @@
                 statusText.textContent = "Detecting text...";
                 
                 // Create a new worker
-                const worker = await Tesseract.createWorker('eng');
+                const worker = await Tesseract.createWorker();
+                
+                // Load and initialize with English language
+                await worker.loadLanguage('eng');
+                await worker.initialize('eng');
                 
                 // Set parameters for better OCR performance
                 await worker.setParameters({
-                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? ',
-                    tessjs_create_pdf: '0',
-                    tessjs_create_hocr: '0',
-                    tessjs_create_tsv: '0',
-                    tessjs_create_box: '0',
-                    tessjs_create_unlv: '0',
-                    tessjs_create_osd: '0'
+                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? '
                 });
                 
                 // Recognize text from image
@@ -352,8 +370,8 @@
                     statusText.textContent = "No text detected. Try again with better lighting or positioning.";
                 }
             } catch (err) {
-                console.error('Error in text recognition:', err);
-                statusText.textContent = "Error processing image: " + err.message;
+                showError('Error in text recognition', err);
+                statusText.textContent = "Error processing image. See error message for details.";
             } finally {
                 isProcessing = false;
             }
@@ -402,12 +420,17 @@
         captureButton.addEventListener('click', captureAndDecode);
         window.addEventListener('orientationchange', handleOrientationChange);
         
+        // Handle video play failures
+        video.addEventListener('error', (e) => {
+            showError('Video error', e.error || new Error('Unknown video error'));
+        });
+        
         // Initial orientation setup
         handleOrientationChange();
         
-        // Start with back camera by default
+        // Auto-start camera with a delay to allow page to load
         document.addEventListener('DOMContentLoaded', () => {
-            startCamera();
+            setTimeout(startCamera, 500);
         });
     </script>
 </body>
