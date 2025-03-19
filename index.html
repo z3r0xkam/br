@@ -65,57 +65,21 @@
             pointer-events: none;
             padding: clamp(0.5rem, 2vw, 1rem);
             display: flex;
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 0.2rem;
-        }
-        
-        #live-encrypted-text {
-            background: #504945;
-            color: #928374;
-            border: 1px solid #928374;
-            border-radius: 0.3rem;
-            padding: clamp(0.3rem, 1.5vw, 0.8rem);
-            font-weight: normal;
-            max-width: 100%;
-            word-wrap: break-word;
-            display: none;
-            position: relative;
-        }
-        
-        #live-encrypted-text:after {
-            content: "▶";
-            position: absolute;
-            right: -0.8rem;
-            top: 50%;
-            transform: translateY(-50%);
-            color: #504945;
-            font-size: 1rem;
+            justify-content: center;
+            align-items: center;
         }
         
         #live-decrypted-text {
-            background: rgba(250, 189, 47, 0.7);
-            color: #3c3836;
-            border: 1px solid #fabd2f;
-            border-radius: 0.3rem;
-            padding: clamp(0.3rem, 1.5vw, 0.8rem);
+            background: transparent;
+            color: #fabd2f;
+            padding: clamp(0.2rem, 1vw, 0.5rem);
             font-weight: bold;
-            font-size: 1.1em;
-            text-shadow: 1px 1px 2px #3c3836;
+            font-size: clamp(1rem, 3vw, 1.5rem);
+            text-shadow: 0 0 3px #fabd2f, 2px 2px 4px #3c3836;
             max-width: 100%;
             word-wrap: break-word;
             display: none;
-            position: relative;
-        }
-        
-        #live-decrypted-text:after {
-            content: "▶";
-            position: absolute;
-            right: -0.8rem;
-            top: 50%;
-            transform: translateY(-50%);
-            color: rgba(250, 189, 47, 0.7);
-            font-size: 1rem;
+            text-align: center;
         }
         
         #live-decrypted-text.success {
@@ -123,8 +87,9 @@
         }
         
         @keyframes flash {
-            0% { background: rgba(250, 189, 47, 1); }
-            100% { background: rgba(250, 189, 47, 0.7); }
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
         }
         
         .controls-container {
@@ -226,21 +191,6 @@
             font-style: italic;
             color: #928374;
             text-align: center;
-            position: relative;
-        }
-        
-        #status.loading:after {
-            content: "⠋";
-            animation: spin 1s infinite linear;
-            margin-left: 0.5rem;
-        }
-        
-        @keyframes spin {
-            0% { content: "⠋"; }
-            25% { content: "⠙"; }
-            50% { content: "⠹"; }
-            75% { content: "⠸"; }
-            100% { content: "⠋"; }
         }
         
         #error-message {
@@ -284,7 +234,6 @@
         <div id="video-container">
             <video id="video" autoplay playsinline muted></video>
             <div id="live-overlay">
-                <div id="live-encrypted-text"></div>
                 <div id="live-decrypted-text"></div>
             </div>
         </div>
@@ -318,7 +267,6 @@
         const statusText = document.getElementById('status');
         const errorMessage = document.getElementById('error-message');
         const liveModeToggle = document.getElementById('live-mode-toggle');
-        const liveEncryptedText = document.getElementById('live-encrypted-text');
         const liveDecryptedText = document.getElementById('live-decrypted-text');
         
         let stream = null;
@@ -332,7 +280,6 @@
             console.error(message, err);
             errorMessage.textContent = `${message}: ${err.message || err}`;
             errorMessage.style.display = 'block';
-            statusText.classList.remove('loading');
         }
         
         function clearError() {
@@ -372,89 +319,27 @@
         
         async function startCamera() {
             clearError();
-            statusText.textContent = "Camera initializing…";
-            statusText.classList.add('loading');
-            console.log("Starting camera...");
-            
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                showError("Camera not supported", new Error("No media devices available"));
-                return;
+            statusText.textContent = "Starting camera...";
+            try {
+                if (stream) stream.getTracks().forEach(track => track.stop());
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' },
+                    audio: false
+                });
+                video.srcObject = stream;
+                await video.play();
+                currentCamera = 'back';
+                startButton.textContent = 'Camera Active';
+                statusText.textContent = 'Camera ready. Toggle live mode to scan.';
+                await initTesseract();
+            } catch (err) {
+                showError('Camera error', err);
+                statusText.textContent = 'Camera failed. Check permissions.';
             }
-            
-            const maxAttempts = 3;
-            let attempt = 0;
-            
-            async function tryStart() {
-                try {
-                    if (stream) {
-                        stream.getTracks().forEach(track => track.stop());
-                        console.log("Stopped existing stream");
-                    }
-                    
-                    // Check permissions
-                    if (navigator.permissions && navigator.permissions.query) {
-                        const permission = await navigator.permissions.query({ name: 'camera' });
-                        if (permission.state === 'denied') {
-                            throw new Error("Camera access denied");
-                        }
-                        console.log("Permission state:", permission.state);
-                    }
-                    
-                    // Try environment camera first
-                    try {
-                        stream = await navigator.mediaDevices.getUserMedia({
-                            video: { facingMode: 'environment' },
-                            audio: false
-                        });
-                        console.log("Got environment camera");
-                    } catch (envErr) {
-                        console.log("Environment failed, trying any camera:", envErr);
-                        stream = await navigator.mediaDevices.getUserMedia({
-                            video: true,
-                            audio: false
-                        });
-                        console.log("Got any available camera");
-                    }
-                    
-                    video.srcObject = stream;
-                    await new Promise((resolve) => {
-                        video.onloadedmetadata = () => {
-                            console.log("Video metadata loaded");
-                            resolve();
-                        };
-                    });
-                    await video.play();
-                    currentCamera = 'back';
-                    startButton.textContent = 'Camera Active';
-                    statusText.textContent = 'Camera ready. Toggle live mode to scan.';
-                    statusText.classList.remove('loading');
-                    await initTesseract();
-                } catch (err) {
-                    attempt++;
-                    if (attempt < maxAttempts) {
-                        console.log(`Attempt ${attempt} failed, retrying...`, err);
-                        await new Promise(resolve => setTimeout(resolve, 500));
-                        return tryStart();
-                    }
-                    let errorMsg = "Camera failed";
-                    if (err.name === 'NotAllowedError') errorMsg = "Grant camera access!";
-                    else if (err.name === 'NotFoundError') errorMsg = "No camera found!";
-                    else if (err.name === 'OverconstrainedError') errorMsg = "Camera constraints too strict!";
-                    showError(errorMsg, err);
-                    statusText.textContent = "Camera failed. Click Start Camera again.";
-                }
-            }
-            
-            await tryStart();
-            setTimeout(() => {
-                if (!stream) statusText.textContent = "Camera not started. Click Start Camera again.";
-            }, 5000);
         }
         
         async function switchCamera() {
             clearError();
-            statusText.textContent = "Switching camera…";
-            statusText.classList.add('loading');
             try {
                 const newFacingMode = currentCamera === 'back' ? 'user' : 'environment';
                 if (stream) stream.getTracks().forEach(track => track.stop());
@@ -466,10 +351,8 @@
                 await video.play();
                 currentCamera = currentCamera === 'back' ? 'front' : 'back';
                 statusText.textContent = `Using ${currentCamera} camera`;
-                statusText.classList.remove('loading');
             } catch (err) {
                 showError('Switch error', err);
-                statusText.textContent = "Switch failed. Try again.";
             }
         }
         
@@ -489,7 +372,6 @@
                 statusText.textContent = "Start camera first!";
                 return false;
             }
-            liveEncryptedText.style.display = 'block';
             liveDecryptedText.style.display = 'block';
             const interval = window.innerWidth < 400 ? 1500 : 1000;
             let lastProcessTime = 0;
@@ -526,22 +408,19 @@
                     }
                     
                     if (text) {
-                        liveEncryptedText.textContent = text;
                         const decrypted = caesarDecrypt(text, 3);
                         liveDecryptedText.textContent = decrypted;
                         statusText.textContent = `Scanning… ${Math.round(confidence)}% confidence`;
                         if (confidence > 85) liveDecryptedText.classList.add('success');
                         setTimeout(() => liveDecryptedText.classList.remove('success'), 300);
                     } else {
-                        liveEncryptedText.textContent = "No text detected";
-                        liveDecryptedText.textContent = "Awaiting decryption";
+                        liveDecryptedText.textContent = "No text detected";
                         statusText.textContent = "Scanning…";
                     }
                     
                     lastProcessTime = Date.now();
                 } catch (err) {
-                    liveEncryptedText.textContent = "Detection error";
-                    liveDecryptedText.textContent = "Error processing";
+                    liveDecryptedText.textContent = "Detection error";
                     console.error(err);
                 }
             }, interval);
@@ -550,7 +429,6 @@
         
         function stopLiveDecryption() {
             if (liveDetectionInterval) clearInterval(liveDetectionInterval);
-            liveEncryptedText.style.display = 'none';
             liveDecryptedText.style.display = 'none';
         }
         
@@ -575,7 +453,7 @@
         switchButton.addEventListener('click', switchCamera);
         liveModeToggle.addEventListener('change', toggleLiveMode);
         
-        window.onload = () => setTimeout(startCamera, 500);
+        document.addEventListener('DOMContentLoaded', () => setTimeout(startCamera, 500));
     </script>
 </body>
 </html>
