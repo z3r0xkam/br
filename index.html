@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cipher Text 1</title>
+    <title>Cipher Text Detector</title>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/tesseract.min.js"></script>
     <style>
         body {
@@ -41,6 +41,7 @@
             padding-right: 10px;
             display: flex;
             flex-direction: column;
+            position: relative;
         }
         
         #video {
@@ -50,6 +51,34 @@
             border: 2px solid #333;
             border-radius: 8px;
             object-fit: cover;
+        }
+        
+        #live-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        
+        #live-decrypted-text {
+            background-color: rgba(246, 255, 237, 0.8);
+            border: 1px solid #b7eb8f;
+            border-radius: 5px;
+            padding: 5px;
+            margin-bottom: 5px;
+            text-align: left;
+            font-weight: bold;
+            color: #135200;
+            max-width: 100%;
+            word-wrap: break-word;
+            display: none;
         }
         
         #result-container {
@@ -113,6 +142,60 @@
             font-size: 16px;
         }
         
+        /* Live mode toggle */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 5px 0;
+        }
+        
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 24px;
+            margin: 0 10px;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: .4s;
+            border-radius: 24px;
+        }
+        
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .slider {
+            background-color: #1890ff;
+        }
+        
+        input:checked + .slider:before {
+            transform: translateX(26px);
+        }
+        
         /* Landscape-specific adjustments */
         @media (orientation: landscape) {
             .content-container {
@@ -168,9 +251,20 @@
         <button id="capture-btn">Capture & Decode</button>
     </div>
     
+    <div class="toggle-container">
+        <span>Live Decryption:</span>
+        <label class="toggle-switch">
+            <input type="checkbox" id="live-mode-toggle">
+            <span class="slider"></span>
+        </label>
+    </div>
+    
     <div class="content-container">
         <div id="video-container">
             <video id="video" autoplay playsinline muted></video>
+            <div id="live-overlay">
+                <div id="live-decrypted-text"></div>
+            </div>
         </div>
         
         <div id="result-container">
@@ -200,6 +294,8 @@
         const decryptedTextDiv = document.getElementById('decrypted-text');
         const errorMessage = document.getElementById('error-message');
         const cameraPermissions = document.getElementById('camera-permissions');
+        const liveModeToggle = document.getElementById('live-mode-toggle');
+        const liveDecryptedText = document.getElementById('live-decrypted-text');
         
         // Global variables
         let stream = null;
@@ -207,6 +303,9 @@
         let frontCameraId = null;
         let currentCamera = 'back'; // Start with back camera
         let isProcessing = false;
+        let liveMode = false;
+        let liveDetectionInterval = null;
+        let tesseractWorker = null;
         
         // Function to display detailed error message
         function showError(message, err) {
@@ -236,6 +335,32 @@
             return true;
         }
         
+        // Initialize Tesseract worker
+        async function initTesseract() {
+            if (tesseractWorker) {
+                return tesseractWorker;
+            }
+            
+            try {
+                // Create a new worker
+                tesseractWorker = await Tesseract.createWorker();
+                
+                // Load and initialize with English language
+                await tesseractWorker.loadLanguage('eng');
+                await tesseractWorker.initialize('eng');
+                
+                // Set parameters for better OCR performance
+                await tesseractWorker.setParameters({
+                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? '
+                });
+                
+                return tesseractWorker;
+            } catch (err) {
+                showError('Error initializing Tesseract', err);
+                return null;
+            }
+        }
+        
         // Function to start camera with simplified constraints
         async function startCamera() {
             if (!checkCameraSupport()) return;
@@ -260,6 +385,10 @@
                     currentCamera = 'back';
                     startButton.textContent = 'Camera Active';
                     statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
+                    
+                    // Initialize Tesseract for possible live mode
+                    await initTesseract();
+                    
                     return;
                 } catch (err) {
                     console.log('Could not access back camera, trying any camera:', err);
@@ -275,6 +404,9 @@
                 currentCamera = 'unknown';
                 startButton.textContent = 'Camera Active';
                 statusText.textContent = 'Camera ready. Click "Capture & Decode" to detect text.';
+                
+                // Initialize Tesseract for possible live mode
+                await initTesseract();
             } catch (err) {
                 showError('Error accessing camera', err);
                 statusText.textContent = 'Failed to start camera. Check permissions.';
@@ -310,6 +442,29 @@
             }
         }
         
+        // Caesar cipher decryption function (shift is how many letters to shift back)
+        function caesarDecrypt(text, shift) {
+            return text.split('').map(char => {
+                // Check if character is a letter
+                if (/[a-zA-Z]/.test(char)) {
+                    // Get ASCII code
+                    const code = char.charCodeAt(0);
+                    let shiftedCode;
+                    
+                    // Shift based on whether character is uppercase or lowercase
+                    if (code >= 65 && code <= 90) { // Uppercase
+                        shiftedCode = ((code - 65 - shift + 26) % 26) + 65;
+                    } else if (code >= 97 && code <= 122) { // Lowercase
+                        shiftedCode = ((code - 97 - shift + 26) % 26) + 97;
+                    }
+                    
+                    return String.fromCharCode(shiftedCode);
+                }
+                // Return non-alphabetic characters unchanged
+                return char;
+            }).join('');
+        }
+        
         // Function to capture image and recognize text
         async function captureAndDecode() {
             if (!stream) {
@@ -339,24 +494,12 @@
                 // Recognize text using Tesseract.js
                 statusText.textContent = "Detecting text...";
                 
-                // Create a new worker
-                const worker = await Tesseract.createWorker();
-                
-                // Load and initialize with English language
-                await worker.loadLanguage('eng');
-                await worker.initialize('eng');
-                
-                // Set parameters for better OCR performance
-                await worker.setParameters({
-                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? '
-                });
+                // Get worker
+                const worker = await initTesseract();
                 
                 // Recognize text from image
                 const result = await worker.recognize(imageData);
                 const detectedText = result.data.text.trim();
-                
-                // Terminate worker after use
-                await worker.terminate();
                 
                 if (detectedText.length > 0) {
                     encryptedTextDiv.textContent = detectedText;
@@ -377,27 +520,96 @@
             }
         }
         
-        // Caesar cipher decryption function (shift is how many letters to shift back)
-        function caesarDecrypt(text, shift) {
-            return text.split('').map(char => {
-                // Check if character is a letter
-                if (/[a-zA-Z]/.test(char)) {
-                    // Get ASCII code
-                    const code = char.charCodeAt(0);
-                    let shiftedCode;
-                    
-                    // Shift based on whether character is uppercase or lowercase
-                    if (code >= 65 && code <= 90) { // Uppercase
-                        shiftedCode = ((code - 65 - shift + 26) % 26) + 65;
-                    } else if (code >= 97 && code <= 122) { // Lowercase
-                        shiftedCode = ((code - 97 - shift + 26) % 26) + 97;
-                    }
-                    
-                    return String.fromCharCode(shiftedCode);
+        // Function to handle live decryption
+        async function startLiveDecryption() {
+            if (!stream) {
+                statusText.textContent = "Camera not started. Please start camera first.";
+                return false;
+            }
+            
+            // Clear previous interval if exists
+            if (liveDetectionInterval) {
+                clearInterval(liveDetectionInterval);
+            }
+            
+            // Initialize Tesseract if not already done
+            if (!tesseractWorker) {
+                try {
+                    await initTesseract();
+                } catch (err) {
+                    showError('Error initializing Tesseract for live mode', err);
+                    return false;
                 }
-                // Return non-alphabetic characters unchanged
-                return char;
-            }).join('');
+            }
+            
+            // Show live decryption overlay
+            liveDecryptedText.style.display = 'block';
+            
+            // Start detection interval
+            let processing = false;
+            liveDetectionInterval = setInterval(async () => {
+                if (processing || !liveMode) return;
+                
+                try {
+                    processing = true;
+                    
+                    // Set canvas dimensions to match video
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    
+                    // Draw video frame to canvas
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    
+                    // Get image data from canvas
+                    const imageData = canvas.toDataURL('image/png');
+                    
+                    // Recognize text using Tesseract.js
+                    const result = await tesseractWorker.recognize(imageData);
+                    const detectedText = result.data.text.trim();
+                    
+                    if (detectedText.length > 0) {
+                        // Decrypt using Caesar cipher (shift 3)
+                        const decryptedText = caesarDecrypt(detectedText, 3);
+                        liveDecryptedText.textContent = decryptedText;
+                    } else {
+                        liveDecryptedText.textContent = "No text detected";
+                    }
+                } catch (err) {
+                    console.error('Live decryption error:', err);
+                    liveDecryptedText.textContent = "Error detecting text";
+                } finally {
+                    processing = false;
+                }
+            }, 1000); // Check every second
+            
+            return true;
+        }
+        
+        // Function to stop live decryption
+        function stopLiveDecryption() {
+            if (liveDetectionInterval) {
+                clearInterval(liveDetectionInterval);
+                liveDetectionInterval = null;
+            }
+            
+            liveDecryptedText.style.display = 'none';
+        }
+        
+        // Function to toggle live mode
+        async function toggleLiveMode() {
+            liveMode = liveModeToggle.checked;
+            
+            if (liveMode) {
+                statusText.textContent = "Live decryption mode activated";
+                const success = await startLiveDecryption();
+                if (!success) {
+                    liveModeToggle.checked = false;
+                    liveMode = false;
+                }
+            } else {
+                stopLiveDecryption();
+                statusText.textContent = "Live decryption mode deactivated";
+            }
         }
         
         // Function to handle orientation changes
@@ -414,10 +626,29 @@
             }
         }
         
+        // Clean up resources when page unloads
+        window.addEventListener('beforeunload', () => {
+            // Stop camera stream
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            
+            // Terminate Tesseract worker
+            if (tesseractWorker) {
+                tesseractWorker.terminate();
+            }
+            
+            // Clear intervals
+            if (liveDetectionInterval) {
+                clearInterval(liveDetectionInterval);
+            }
+        });
+        
         // Event listeners
         startButton.addEventListener('click', startCamera);
         switchButton.addEventListener('click', switchCamera);
         captureButton.addEventListener('click', captureAndDecode);
+        liveModeToggle.addEventListener('change', toggleLiveMode);
         window.addEventListener('orientationchange', handleOrientationChange);
         
         // Handle video play failures
