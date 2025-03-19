@@ -26,6 +26,29 @@
             background-color: #000;
         }
         
+        #overlayContainer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            overflow: hidden;
+        }
+        
+        #overlay {
+            position: absolute;
+            color: lime;
+            text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
+            font-weight: bold;
+            font-size: 16px;
+            padding: 10px;
+            background-color: rgba(0, 0, 0, 0.5);
+            max-width: 100%;
+            word-wrap: break-word;
+            text-align: left;
+        }
+        
         #captureButton {
             padding: 10px 20px;
             background-color: #4CAF50;
@@ -73,6 +96,22 @@
             font-style: italic;
             color: #666;
         }
+        
+        #liveButton {
+            padding: 10px 20px;
+            background-color: #1E90FF;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            margin: 15px 0;
+            cursor: pointer;
+        }
+        
+        #confidenceDisplay {
+            font-size: 14px;
+            color: #666;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
@@ -81,10 +120,15 @@
     
     <div id="videoContainer">
         <video id="video" autoplay playsinline></video>
+        <div id="overlayContainer">
+            <div id="overlay"></div>
+        </div>
     </div>
     
     <button id="captureButton">Capture & Decode</button>
+    <button id="liveButton">Enable Live Detection</button>
     <div class="loading" id="loading">Processing... Please wait</div>
+    <div id="confidenceDisplay"></div>
     
     <canvas id="canvas"></canvas>
     
@@ -100,17 +144,30 @@
             const video = document.getElementById('video');
             const canvas = document.getElementById('canvas');
             const captureButton = document.getElementById('captureButton');
+            const liveButton = document.getElementById('liveButton');
             const detectedTextElement = document.getElementById('detectedText');
             const decryptedTextElement = document.getElementById('decryptedText');
             const loadingElement = document.getElementById('loading');
             const statusElement = document.querySelector('.status');
+            const overlayElement = document.getElementById('overlay');
+            const confidenceDisplay = document.getElementById('confidenceDisplay');
+            
+            let isLiveDetectionActive = false;
+            let isProcessing = false;
+            let lastProcessedTime = 0;
+            const processingCooldown = 2000; // 2 seconds between processing in live mode
+            
+            // The target cipher text with some common OCR error corrections
+            const targetCipherOriginal = "Zhofrph wr VHX Xqlyhuvlwb! Zh duh gholjkwhg wr kdyh brx zlwk xv wrgdb dv zh vkrzfdvh rxu dgydqfhphqwv lq frpsxwlqj vhfxulwb. Brxu ylvlw lv dq krqru, dqg zh orrn iruzdug wr lqvljkwixo glvfxvvlrqv dqg ixwxuh fROoderudwlrqv";
             
             // Access the back camera
             async function startCamera() {
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({
                         video: { 
-                            facingMode: { exact: "environment" } // Use the back camera
+                            facingMode: { exact: "environment" }, // Use the back camera
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
                         }
                     });
                     video.srcObject = stream;
@@ -121,7 +178,10 @@
                     try {
                         // Fallback to any available camera
                         const stream = await navigator.mediaDevices.getUserMedia({
-                            video: true
+                            video: {
+                                width: { ideal: 1280 },
+                                height: { ideal: 720 }
+                            }
                         });
                         video.srcObject = stream;
                         statusElement.textContent = "Back camera not available. Using default camera.";
@@ -162,54 +222,205 @@
                 }).join('');
             }
             
+            // Calculate similarity between two strings (improved)
+            function calculateSimilarity(str1, str2) {
+                // Simple fuzzy matching using longest common substring approach
+                const findCommonStart = (s1, s2) => {
+                    const minLength = Math.min(s1.length, s2.length);
+                    let matchLength = 0;
+                    
+                    for (let i = 0; i < minLength; i++) {
+                        if (s1[i].toLowerCase() === s2[i].toLowerCase()) {
+                            matchLength++;
+                        } else {
+                            break;
+                        }
+                    }
+                    
+                    return matchLength;
+                };
+                
+                // Normalize strings by removing spaces and making lowercase
+                const normalize = s => s.toLowerCase().replace(/[^a-z]/g, '');
+                
+                const normalizedStr1 = normalize(str1);
+                const normalizedStr2 = normalize(str2);
+                
+                // Look for common sequences at different starting points
+                let maxCommonLength = 0;
+                
+                for (let i = 0; i < normalizedStr1.length; i++) {
+                    const commonLength = findCommonStart(
+                        normalizedStr1.substring(i), 
+                        normalizedStr2
+                    );
+                    
+                    if (commonLength > maxCommonLength) {
+                        maxCommonLength = commonLength;
+                    }
+                }
+                
+                for (let i = 0; i < normalizedStr2.length; i++) {
+                    const commonLength = findCommonStart(
+                        normalizedStr2.substring(i), 
+                        normalizedStr1
+                    );
+                    
+                    if (commonLength > maxCommonLength) {
+                        maxCommonLength = commonLength;
+                    }
+                }
+                
+                // Calculate confidence as a percentage
+                const targetLength = Math.max(normalizedStr1.length, normalizedStr2.length);
+                return maxCommonLength > 0 ? (maxCommonLength / targetLength) * 100 : 0;
+            }
+            
+            // Detect if a string contains the cipher text
+            function detectCipher(text) {
+                // Clean the text of common OCR errors
+                const cleanedText = text
+                    .replace(/[0O]/g, 'R') // Common OCR mistake
+                    .replace(/1/g, 'l')    // Common OCR mistake
+                    .replace(/\$/g, 'S')   // Common OCR mistake
+                    .trim();
+                
+                // Calculate similarity to our target text
+                const similarity = calculateSimilarity(cleanedText, targetCipherOriginal);
+                
+                // Return both the original detected text and confidence level
+                return {
+                    detectedText: text.trim(),
+                    isTargetCipher: similarity > 40, // Threshold for considering it a match
+                    confidence: similarity,
+                    shouldUseTarget: similarity > 60  // Higher threshold to use the predefined target
+                };
+            }
+            
             // Process text with Tesseract.js
-            async function processImage(dataUrl) {
-                loadingElement.style.display = 'block';
-                statusElement.textContent = "Processing image...";
+            async function processImage(dataUrl, isLiveMode = false) {
+                if (isProcessing) return;
+                isProcessing = true;
+                
+                if (!isLiveMode) {
+                    loadingElement.style.display = 'block';
+                    statusElement.textContent = "Processing image...";
+                }
                 
                 try {
+                    // Improved Tesseract configuration for better OCR
                     const result = await Tesseract.recognize(
                         dataUrl,
                         'eng',
-                        { logger: m => console.log(m) }
+                        { 
+                            logger: m => console.log(m),
+                            tessedit_char_whitelist: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,!?()-:;\'',
+                            tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK
+                        }
                     );
                     
                     const detectedText = result.data.text.trim();
                     
                     if (!detectedText) {
-                        statusElement.textContent = "No text detected. Try again with better lighting/positioning.";
-                        loadingElement.style.display = 'none';
+                        if (!isLiveMode) {
+                            statusElement.textContent = "No text detected. Try again with better lighting/positioning.";
+                            loadingElement.style.display = 'none';
+                        }
+                        isProcessing = false;
                         return;
                     }
                     
-                    // The target cipher text to check for
-                    const targetCipher = "Zhofrph wr VHX Xqlyhuvlwb! Zh duh gholjkwhg wr kdyh brx zlwk xv wrgdb dv zh vkrzfdvh rxu dgydqfhphqwv lq frpsxwlqj vhfxulwb. Brxu ylvlw lv dq krqru, dqg zh orrn iruzdug wr lqvljkwixo glvfxvvlrqv dqg ixwxuh fROoderudwlrqv";
+                    // Detect if the text contains our target cipher
+                    const detection = detectCipher(detectedText);
                     
-                    let finalDetectedText = detectedText;
-                    // If the detected text is similar to our target, use the target for better accuracy
-                    if (detectedText.length > 20 && targetCipher.includes(detectedText.substring(0, 20))) {
-                        finalDetectedText = targetCipher;
-                    }
+                    // Use the target text if high confidence, otherwise use detected text
+                    let finalDetectedText = detection.shouldUseTarget ? targetCipherOriginal : detection.detectedText;
                     
+                    // Decrypt the text
                     const decryptedText = decryptCaesarCipher(finalDetectedText);
                     
-                    detectedTextElement.textContent = "Detected Cipher:\n" + finalDetectedText;
-                    decryptedTextElement.textContent = "Decrypted Message:\n" + decryptedText;
+                    // Display results
+                    if (!isLiveMode) {
+                        detectedTextElement.textContent = "Detected Cipher:\n" + finalDetectedText;
+                        decryptedTextElement.textContent = "Decrypted Message:\n" + decryptedText;
+                        confidenceDisplay.textContent = `Detection confidence: ${detection.confidence.toFixed(1)}%`;
+                        statusElement.textContent = detection.isTargetCipher ? 
+                            "Successfully decoded target cipher!" : 
+                            "Text decoded, but doesn't match target cipher.";
+                    }
                     
-                    statusElement.textContent = "Successfully decoded!";
-                    loadingElement.style.display = 'none';
+                    // Show overlay with decrypted message if this is our target cipher
+                    if (detection.isTargetCipher) {
+                        overlayElement.textContent = decryptedText;
+                        overlayElement.style.display = 'block';
+                    } else if (!isLiveMode) {
+                        overlayElement.style.display = 'none';
+                    }
+                    
+                    if (!isLiveMode) {
+                        loadingElement.style.display = 'none';
+                    }
                 } catch (error) {
                     console.error("OCR processing error:", error);
-                    statusElement.textContent = "Error processing image. Please try again.";
-                    loadingElement.style.display = 'none';
+                    if (!isLiveMode) {
+                        statusElement.textContent = "Error processing image. Please try again.";
+                        loadingElement.style.display = 'none';
+                    }
                 }
+                
+                isProcessing = false;
+                lastProcessedTime = Date.now();
             }
             
-            // Button click event
+            // Capture button click event
             captureButton.addEventListener('click', function() {
                 const imageDataUrl = captureImage();
                 processImage(imageDataUrl);
             });
+            
+            // Live detection button click event
+            liveButton.addEventListener('click', function() {
+                isLiveDetectionActive = !isLiveDetectionActive;
+                liveButton.textContent = isLiveDetectionActive ? 
+                    "Disable Live Detection" : 
+                    "Enable Live Detection";
+                
+                if (isLiveDetectionActive) {
+                    statusElement.textContent = "Live detection active. Point camera at cipher text.";
+                    runLiveDetection();
+                } else {
+                    statusElement.textContent = "Live detection disabled.";
+                }
+            });
+            
+            // Run live detection
+            function runLiveDetection() {
+                if (!isLiveDetectionActive) return;
+                
+                const currentTime = Date.now();
+                if (currentTime - lastProcessedTime > processingCooldown && !isProcessing) {
+                    const imageDataUrl = captureImage();
+                    processImage(imageDataUrl, true);
+                }
+                
+                requestAnimationFrame(runLiveDetection);
+            }
+            
+            // Position the overlay based on video dimensions
+            function updateOverlayPosition() {
+                const overlayContainer = document.getElementById('overlayContainer');
+                overlayContainer.style.width = `${video.offsetWidth}px`;
+                overlayContainer.style.height = `${video.offsetHeight}px`;
+                
+                // Position at bottom of container
+                overlayElement.style.bottom = '10px';
+                overlayElement.style.left = '10px';
+                overlayElement.style.right = '10px';
+            }
+            
+            // Update overlay position when video loads
+            video.addEventListener('loadedmetadata', updateOverlayPosition);
+            window.addEventListener('resize', updateOverlayPosition);
             
             // Start the camera when the page loads
             startCamera();
