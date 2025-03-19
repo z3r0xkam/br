@@ -121,22 +121,8 @@
         let currentCamera = 'back'; // Start with back camera
         let isProcessing = false;
         
-        // Initialize Tesseract
-        const worker = Tesseract.createWorker();
-        
-        // Setup Tesseract worker
-        async function initTesseract() {
-            await worker.load();
-            await worker.loadLanguage('eng');
-            await worker.initialize('eng');
-            await worker.setParameters({
-                tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? '
-            });
-            console.log("Tesseract worker initialized");
-        }
-        
-        // Start initialization
-        initTesseract();
+        // Initialize Tesseract scheduler
+        const scheduler = Tesseract.createScheduler();
         
         // Function to start camera
         async function startCamera() {
@@ -258,10 +244,23 @@
                 // Get image data from canvas
                 const imageData = canvas.toDataURL('image/png');
                 
-                // Recognize text
+                // Recognize text using Tesseract.js
                 statusText.textContent = "Detecting text...";
+                
+                // Create a new worker
+                const worker = await Tesseract.createWorker('eng');
+                
+                // Set parameters for better OCR performance
+                await worker.setParameters({
+                    tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!.,? '
+                });
+                
+                // Recognize text from image
                 const result = await worker.recognize(imageData);
                 const detectedText = result.data.text.trim();
+                
+                // Terminate worker after use
+                await worker.terminate();
                 
                 if (detectedText.length > 0) {
                     encryptedTextDiv.textContent = detectedText;
