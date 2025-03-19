@@ -65,16 +65,43 @@
             pointer-events: none;
             padding: clamp(0.5rem, 2vw, 1rem);
             display: flex;
+            flex-direction: column;
             align-items: flex-start;
+            gap: 0.2rem;
+        }
+        
+        #live-encrypted-text {
+            background: #504945;
+            color: #928374;
+            border: 1px solid #928374;
+            border-radius: 0.3rem;
+            padding: clamp(0.3rem, 1.5vw, 0.8rem);
+            font-weight: normal;
+            max-width: 100%;
+            word-wrap: break-word;
+            display: none;
+            position: relative;
+        }
+        
+        #live-encrypted-text:after {
+            content: "▶";
+            position: absolute;
+            right: -0.8rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #504945;
+            font-size: 1rem;
         }
         
         #live-decrypted-text {
-            background: #504945;
-            color: #fabd2f;
+            background: rgba(250, 189, 47, 0.7); /* Yellow with transparency */
+            color: #3c3836;
             border: 1px solid #fabd2f;
             border-radius: 0.3rem;
-            padding: 0.5rem;
+            padding: clamp(0.3rem, 1.5vw, 0.8rem);
             font-weight: bold;
+            font-size: 1.1em;
+            text-shadow: 1px 1px 2px #3c3836;
             max-width: 100%;
             word-wrap: break-word;
             display: none;
@@ -87,7 +114,7 @@
             right: -0.8rem;
             top: 50%;
             transform: translateY(-50%);
-            color: #504945;
+            color: rgba(250, 189, 47, 0.7);
             font-size: 1rem;
         }
         
@@ -96,8 +123,8 @@
         }
         
         @keyframes flash {
-            0% { background: #fabd2f; color: #504945; }
-            100% { background: #504945; color: #fabd2f; }
+            0% { background: rgba(250, 189, 47, 1); }
+            100% { background: rgba(250, 189, 47, 0.7); }
         }
         
         .controls-container {
@@ -242,6 +269,7 @@
         <div id="video-container">
             <video id="video" autoplay playsinline muted></video>
             <div id="live-overlay">
+                <div id="live-encrypted-text"></div>
                 <div id="live-decrypted-text"></div>
             </div>
         </div>
@@ -275,6 +303,7 @@
         const statusText = document.getElementById('status');
         const errorMessage = document.getElementById('error-message');
         const liveModeToggle = document.getElementById('live-mode-toggle');
+        const liveEncryptedText = document.getElementById('live-encrypted-text');
         const liveDecryptedText = document.getElementById('live-decrypted-text');
         
         let stream = null;
@@ -322,7 +351,7 @@
                 data[i] = data[i + 1] = data[i + 2] = gray;
             }
             
-            // Contrast enhancement (simple threshold)
+            // Contrast enhancement
             for (let i = 0; i < data.length; i += 4) {
                 data[i] = data[i + 1] = data[i + 2] = data[i] > 127 ? 255 : 0;
             }
@@ -385,6 +414,7 @@
                 statusText.textContent = "Start camera first!";
                 return false;
             }
+            liveEncryptedText.style.display = 'block';
             liveDecryptedText.style.display = 'block';
             const interval = window.innerWidth < 400 ? 1500 : 1000; // Faster on bigger screens
             let lastProcessTime = 0;
@@ -395,7 +425,7 @@
                 
                 try {
                     const startTime = Date.now();
-                    canvas.width = Math.round(video.videoWidth * 0.8); // Downscale for speed
+                    canvas.width = Math.round(video.videoWidth * 0.8);
                     canvas.height = Math.round(video.videoHeight * 0.8);
                     
                     // Crop to central 70%
@@ -412,7 +442,6 @@
                     let text = result.data.text.trim();
                     let confidence = result.data.confidence;
                     
-                    // Retry with stricter settings if confidence is low
                     if (confidence < 80 && text.length > 0) {
                         await tesseractWorker.setParameters({
                             tessedit_char_blacklist: '~`@#$%^&*()_+-={}[]|\\:;"\'<>,/'
@@ -424,19 +453,22 @@
                     }
                     
                     if (text) {
+                        liveEncryptedText.textContent = text;
                         const decrypted = caesarDecrypt(text, 3);
                         liveDecryptedText.textContent = decrypted;
                         statusText.textContent = `Scanning… ${Math.round(confidence)}% confidence`;
                         if (confidence > 85) liveDecryptedText.classList.add('success');
                         setTimeout(() => liveDecryptedText.classList.remove('success'), 300);
                     } else {
-                        liveDecryptedText.textContent = "No text detected";
+                        liveEncryptedText.textContent = "No text detected";
+                        liveDecryptedText.textContent = "Awaiting decryption";
                         statusText.textContent = "Scanning…";
                     }
                     
                     lastProcessTime = Date.now();
                 } catch (err) {
-                    liveDecryptedText.textContent = "Detection error";
+                    liveEncryptedText.textContent = "Detection error";
+                    liveDecryptedText.textContent = "Error processing";
                     console.error(err);
                 }
             }, interval);
@@ -445,6 +477,7 @@
         
         function stopLiveDecryption() {
             if (liveDetectionInterval) clearInterval(liveDetectionInterval);
+            liveEncryptedText.style.display = 'none';
             liveDecryptedText.style.display = 'none';
         }
         
