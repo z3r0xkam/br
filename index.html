@@ -13,22 +13,23 @@
         .message-stack { display: flex; flex-direction: column; gap: 10px; }
         .encrypted { color: #f00; font-weight: bold; }
         .decrypted { color: #0f0; font-weight: bold; }
+        #debug { font-size: 14px; color: #ff0; }
     </style>
 </head>
 <body>
     <video id="webcam" autoplay playsinline></video>
     <canvas id="canvas" style="display: none;"></canvas>
     <div id="output">Initializing Rebel Scan...</div>
+    <div id="debug"></div>
 
     <script>
         const webcamElement = document.getElementById('webcam');
         const canvasElement = document.getElementById('canvas');
         const outputElement = document.getElementById('output');
+        const debugElement = document.getElementById('debug');
         
-        // Target cipher text
         const targetCipher = "Zhofrph wr VHX Xqlyhuvlwb! Zh duh gholjkwhg wr kdyh brx zlwk xv wrgdb dv zh vkrzfdvh rxu dgydqfhphqwv lq frpsxwlqj vhfxulwb. Brxu ylvlw lv dq krqru, dqg zh orrn iruzdug wr lqvljkwixo glvfxvvlrqv dqg ixwxuh fROoderudwlrqv";
         
-        // Initialize webcam with back camera
         const webcam = new Webcam(webcamElement, 'environment', canvasElement);
         
         webcam.start()
@@ -54,45 +55,44 @@
 
         async function detectText() {
             while (true) {
-                // Capture frame
                 const picture = webcam.snap();
                 canvasElement.src = picture;
 
-                // Enhance image for better detection
+                // Advanced preprocessing
                 const context = canvasElement.getContext('2d');
+                context.drawImage(webcamElement, 0, 0, canvasElement.width, canvasElement.height);
                 const imgData = context.getImageData(0, 0, canvasElement.width, canvasElement.height);
                 const data = imgData.data;
 
-                // Simple contrast boost
+                // Grayscale and adaptive threshold
                 for (let i = 0; i < data.length; i += 4) {
                     const r = data[i], g = data[i + 1], b = data[i + 2];
-                    const brightness = (r + g + b) / 3;
-                    const contrast = brightness > 127 ? 255 : 0;
-                    data[i] = data[i + 1] = data[i + 2] = contrast;
+                    const gray = 0.2989 * r + 0.5870 * g + 0.1140 * b; // Proper grayscale
+                    const threshold = gray > 150 ? 255 : 0; // Adaptive threshold
+                    data[i] = data[i + 1] = data[i + 2] = threshold;
                 }
                 context.putImageData(imgData, 0, 0);
 
-                // Recognize text
                 const result = await Tesseract.recognize(
                     canvasElement,
                     'eng',
                     { 
                         logger: m => console.log(m),
-                        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !.,' // Restrict charset
+                        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz !.,'
                     }
                 );
 
                 let detectedText = result.data.text
-                    .replace(/\s+/g, ' ')  // Normalize spacing
-                    .replace(/[^a-zA-Z\s!.]/g, '')  // Strip junk
-                    .trim();
+                    .replace(/\s+/g, ' ')
+                    .replace(/[^a-zA-Z\s!.]/g, '')
+                    .trim()
+                    .toUpperCase();
 
-                // Standardize to uppercase
-                detectedText = detectedText.toUpperCase();
+                // Debug output
+                debugElement.innerHTML = `Detected: "${detectedText}"<br>Confidence: ${result.data.confidence}%`;
 
-                // Fuzzy match with threshold (80% similarity)
                 const similarity = calculateSimilarity(detectedText, targetCipher);
-                if (similarity > 0.8) {
+                if (similarity > 0.7 || detectedText.includes(targetCipher.slice(0, 20))) { // Lowered threshold + substring check
                     const decodedMessage = decodeCaesarCipher(targetCipher, 3);
                     outputElement.innerHTML = `
                         <div class="message-stack">
@@ -105,11 +105,10 @@
                     outputElement.innerHTML = `Scanning... Similarity: ${(similarity * 100).toFixed(2)}%`;
                 }
 
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                await new Promise(resolve => setTimeout(resolve, 1500));
             }
         }
 
-        // Simple similarity check (Levenshtein distance)
         function calculateSimilarity(str1, str2) {
             const longer = str1.length > str2.length ? str1 : str2;
             const shorter = str1.length > str2.length ? str2 : str1;
@@ -122,10 +121,8 @@
         function levenshteinDistance(str1, str2) {
             const matrix = Array(str2.length + 1).fill(null)
                 .map(() => Array(str1.length + 1).fill(null));
-
             for (let i = 0; i <= str1.length; i++) matrix[0][i] = i;
             for (let j = 0; j <= str2.length; j++) matrix[j][0] = j;
-
             for (let j = 1; j <= str2.length; j++) {
                 for (let i = 1; i <= str1.length; i++) {
                     const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
